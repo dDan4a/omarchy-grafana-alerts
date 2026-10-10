@@ -6,13 +6,26 @@
   "author": "dDan4a",
   "license": "MIT",
   "description": "Firing Grafana alerts in the Omarchy bar: severity badge, alert list, desktop notifications, one-key silence. Works in demo mode without a Grafana instance.",
-  "kinds": ["bar-widget"],
-  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "service": "AlertSource.qml",
+    "barWidget": "BarWidget.qml"
+  },
   "barWidget": {
     "displayName": "Grafana Alerts",
     "description": "Firing Grafana-managed alerts with notifications and silences",
     "category": "Monitoring",
-    "aliases": ["grafana", "alerts", "alerting", "monitoring", "on-call", "incident"],
+    "aliases": [
+      "grafana",
+      "alerts",
+      "alerting",
+      "monitoring",
+      "on-call",
+      "incident"
+    ],
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
@@ -52,5 +65,6 @@
         "defaultValue": true
       }
     ]
-  }
+  },
+  "keepLoaded": true
 }

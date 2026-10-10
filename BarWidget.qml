@@ -1,6 +1,5 @@
 import QtQuick
 import Quickshell
-import Quickshell.Io
 import qs.Commons
 import qs.Ui
 
@@ -13,7 +12,10 @@ BarWidget {
   readonly property real openPanelIndicatorHeight: Math.max(Style.space(10), Math.round(Style.bar.iconSlot * 0.55))
   readonly property bool popoutSwitchClosing: panelLoader.item ? panelLoader.item.popoutSwitchClosing === true : false
 
-  readonly property var summary: source.summary
+  // One service instance shared by the widgets on every monitor (see AlertSource.qml).
+  readonly property var source: bar && bar.shell ? bar.shell.serviceFor("dan4a.grafana-alerts") : null
+  readonly property var summary: source ? source.summary : ({ critical: 0, warning: 0, info: 0, silenced: 0, total: 0 })
+  readonly property string error: source ? source.error : ""
 
   function open() { if (panelLoader.item) panelLoader.item.open() }
   function close() { if (panelLoader.item) panelLoader.item.close() }
@@ -27,21 +29,23 @@ BarWidget {
     target.settings = root.settings
     target.anchorItem = button
     target.hostWidget = root
-    target.source = source
+    target.source = root.source
+  }
+
+  // Settings live on the bar widget entry; the service has none of its own, so push them in.
+  function configureSource() {
+    if (!source) return
+    source.grafanaUrl = String(setting("grafanaUrl", ""))
+    source.tokenFile = String(setting("tokenFile", "~/.config/grafana-alerts/token"))
+    source.intervalSec = Number(setting("refreshIntervalSec", 60))
+    source.notify = setting("notify", true) === true
   }
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
   onBarChanged: injectPanel()
-  onSettingsChanged: injectPanel()
-
-  AlertSource {
-    id: source
-    grafanaUrl: String(root.setting("grafanaUrl", ""))
-    tokenFile: String(root.setting("tokenFile", "~/.config/grafana-alerts/token"))
-    intervalSec: Number(root.setting("refreshIntervalSec", 60))
-    notify: root.setting("notify", true) === true
-  }
+  onSettingsChanged: { configureSource(); injectPanel() }
+  onSourceChanged: { configureSource(); injectPanel() }
 
   Loader {
     id: panelLoader
@@ -49,14 +53,6 @@ BarWidget {
     source: Qt.resolvedUrl("Panel.qml")
     visible: false
     onLoaded: { root.injectPanel(); Qt.callLater(root.injectPanel) }
-  }
-
-  IpcHandler {
-    target: "dan4a.grafana-alerts"
-    function open(): void { root.open() }
-    function close(): void { root.close() }
-    function toggle(): void { root.togglePanel() }
-    function refresh(): void { source.refresh() }
   }
 
   WidgetButton {
@@ -67,8 +63,8 @@ BarWidget {
     // nf-md-bell / nf-md-bell_alert
     text: root.summary.total > 0 ? "󰂞 " + root.summary.total : "󰂚"
     foreground: root.summary.critical > 0 ? Color.urgent : (root.bar ? root.bar.barForeground : Color.foreground)
-    dimmed: root.summary.total === 0 && source.error === ""
-    tooltipText: source.error !== "" ? "Grafana: " + source.error
+    dimmed: root.summary.total === 0 && root.error === ""
+    tooltipText: root.error !== "" ? "Grafana: " + root.error
       : root.summary.total === 0 ? "Grafana: all quiet"
       : "Grafana: " + root.summary.critical + " critical, " + root.summary.warning + " warning, " + root.summary.info + " info"
     onPressed: root.togglePanel()

@@ -42,7 +42,7 @@ With the panel open:
 You can also drive it from the command line:
 
 ```bash
-omarchy-shell dan4a.grafana-alerts toggle
+omarchy-shell shell toggle dan4a.grafana-alerts '{}'   # opens on the focused monitor, good for a keybinding
 omarchy-shell dan4a.grafana-alerts refresh
 ```
 
@@ -51,6 +51,10 @@ omarchy-shell dan4a.grafana-alerts refresh
 The plugin polls `GET /api/alertmanager/grafana/api/v2/alerts?active=true&inhibited=false`, which returns Grafana-managed alerts.
 Severity comes from the `severity` label: `critical`/`high`, `warning`, and everything else counts as info.
 A silence is created with `POST /api/alertmanager/grafana/api/v2/silences` and matches all labels of that one alert.
+
+Polling, notifications and silences live in a single `service` (`AlertSource.qml`, `keepLoaded`). The bar widget on every
+monitor reads that one instance through `bar.shell.serviceFor(...)`. With two monitors you therefore get one poll and one
+notification per alert, not two.
 
 ## Development
 

@@ -4,6 +4,8 @@ import Quickshell.Io
 import "Alerts.js" as Alerts
 
 // Polls Grafana-managed alerts (or generates demo ones) and raises desktop notifications for new ones.
+// Loaded once as the plugin's service: every monitor's bar widget shares it, so there is one poll
+// and one notification per alert no matter how many bars are on screen.
 Item {
   id: root
 
@@ -86,6 +88,11 @@ Item {
 
   onGrafanaUrlChanged: { known = null; refresh() }
   Component.onCompleted: refresh()
+
+  IpcHandler {
+    target: "dan4a.grafana-alerts"
+    function refresh(): void { root.refresh() }
+  }
 
   Timer {
     interval: Math.max(15, root.intervalSec) * 1000
