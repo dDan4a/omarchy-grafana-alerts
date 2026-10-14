@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "author": "dDan4a",
   "license": "MIT",
-  "description": "Firing Grafana alerts in the Omarchy bar: severity badge, alert list, desktop notifications, one-key silence. Works in demo mode without a Grafana instance.",
+  "description": "Firing alerts from one or more Grafana and Prometheus Alertmanager instances in the Omarchy bar: severity badge, alert list grouped by instance, desktop notifications, one-key silence. Works in demo mode without a server.",
   "kinds": [
     "service",
     "bar-widget"
@@ -16,11 +16,13 @@
   },
   "barWidget": {
     "displayName": "Grafana Alerts",
-    "description": "Firing Grafana-managed alerts with notifications and silences",
+    "description": "Firing Grafana / Alertmanager alerts with notifications and silences",
     "category": "Monitoring",
     "aliases": [
       "grafana",
       "alerts",
+      "alertmanager",
+      "prometheus",
       "alerting",
       "monitoring",
       "on-call",
@@ -29,6 +31,7 @@
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
+      "instancesFile": "~/.config/grafana-alerts/instances.json",
       "grafanaUrl": "",
       "tokenFile": "~/.config/grafana-alerts/token",
       "refreshIntervalSec": 60,
@@ -36,11 +39,18 @@
     },
     "schema": [
       {
+        "key": "instancesFile",
+        "type": "path",
+        "label": "Instances file",
+        "defaultValue": "~/.config/grafana-alerts/instances.json",
+        "description": "JSON list of Grafana / Alertmanager instances, see the README. When it does not exist, the Grafana URL below is used."
+      },
+      {
         "key": "grafanaUrl",
         "type": "string",
-        "label": "Grafana URL",
+        "label": "Grafana URL (single instance)",
         "defaultValue": "",
-        "description": "For example https://grafana.example.com. Leave empty for demo mode."
+        "description": "Used only without an instances file, e.g. https://grafana.example.com. Leave both empty for demo mode."
       },
       {
         "key": "tokenFile",

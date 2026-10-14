@@ -1,7 +1,7 @@
 .pragma library
 
-// Pure helpers over Grafana Alertmanager v2 alerts
-// (GET /api/alertmanager/grafana/api/v2/alerts). No QML types here, so tests run under node.
+// Pure helpers over Alertmanager API v2 alerts, served by Grafana (/api/alertmanager/grafana/api/v2)
+// or by a Prometheus Alertmanager (/api/v2). No QML types here, so tests run under node.
 
 var SEVERITY_RANK = { critical: 0, warning: 1, info: 2 }
 
@@ -24,8 +24,38 @@ function displayLabels(labels) {
   return out
 }
 
-// Turns the raw API array into rows for the UI, most urgent and then oldest first.
-function normalize(raw) {
+// Instances come from instances.json. Without that file a configured grafanaUrl is one instance
+// named "default"; with neither, the result is empty and the service runs in demo mode.
+// Throws on malformed JSON or entries, so the panel can say what is wrong with the file.
+function parseInstances(text, legacyUrl, legacyTokenFile) {
+  if (text === null || text === undefined) {
+    var url = String(legacyUrl || "").trim()
+    return url === "" ? [] : [{ name: "default", type: "grafana", url: url.replace(/\/+$/, ""), tokenFile: String(legacyTokenFile || "") }]
+  }
+  var list = JSON.parse(text)
+  if (!Array.isArray(list)) throw new Error("expected a JSON array of instances")
+  var out = [], seen = {}
+  for (var i = 0; i < list.length; i++) {
+    var e = list[i] || {}
+    var name = String(e.name || "").trim()
+    var type = String(e.type || "grafana")
+    var base = String(e.url || "").trim().replace(/\/+$/, "")
+    if (name === "" || base === "") throw new Error("instance " + (i + 1) + " needs a name and a url")
+    if (type !== "grafana" && type !== "alertmanager") throw new Error(name + ": type must be grafana or alertmanager")
+    if (seen[name]) throw new Error("duplicate instance name " + name)
+    seen[name] = true
+    out.push({ name: name, type: type, url: base, tokenFile: String(e.tokenFile || "") })
+  }
+  return out
+}
+
+function apiBase(instance) {
+  return instance.url + (instance.type === "alertmanager" ? "/api/v2" : "/api/alertmanager/grafana/api/v2")
+}
+
+// Turns the raw API array of one instance into rows for the UI, most urgent and then oldest first.
+// `key` is unique across instances: the same fingerprint can fire in prod and in staging.
+function normalize(raw, instance) {
   if (!Array.isArray(raw)) return []
   var rows = []
   for (var i = 0; i < raw.length; i++) {
@@ -33,8 +63,11 @@ function normalize(raw) {
     var labels = a.labels || {}
     var annotations = a.annotations || {}
     var state = (a.status && a.status.state) || "active"
+    var fingerprint = String(a.fingerprint || labels.alertname + JSON.stringify(labels))
     rows.push({
-      fingerprint: String(a.fingerprint || labels.alertname + JSON.stringify(labels)),
+      instance: String(instance || ""),
+      key: String(instance || "") + "/" + fingerprint,
+      fingerprint: fingerprint,
       name: String(labels.alertname || "Unnamed alert"),
       severity: severityOf(labels),
       summary: String(annotations.summary || annotations.description || ""),
@@ -64,17 +97,45 @@ function summarize(rows) {
   return s
 }
 
-// Rows whose fingerprint was not in the previous poll. `known` is null on the first poll,
+// Rows whose key was not in the previous poll. `known` is null on the first poll,
 // so startup does not replay every already-firing alert as a notification.
 function newAlerts(rows, known) {
   if (known === null || known === undefined) return []
-  return rows.filter(function(r) { return !r.silenced && !known[r.fingerprint] })
+  return rows.filter(function(r) { return !r.silenced && !known[r.key] })
 }
 
 function fingerprints(rows) {
   var set = {}
-  for (var i = 0; i < rows.length; i++) set[rows[i].fingerprint] = true
+  for (var i = 0; i < rows.length; i++) set[rows[i].key] = true
   return set
+}
+
+// The panel list: with several instances each group gets a header row (alert count or the error),
+// so an unreachable instance shows up in place instead of hiding the others.
+function panelItems(instances, rowsByInstance, errors) {
+  var items = []
+  for (var i = 0; i < instances.length; i++) {
+    var name = instances[i].name
+    var rows = rowsByInstance[name] || []
+    if (instances.length > 1)
+      items.push({ header: true, key: "#" + name, instance: name, error: errors[name] || "", count: summarize(rows).total })
+    items = items.concat(rows)
+  }
+  return items
+}
+
+// Next selectable index from `from` moving by `dy`, skipping headers; stays put at the ends.
+function step(items, from, dy) {
+  var dir = dy < 0 ? -1 : 1
+  for (var i = from + dir; i >= 0 && i < items.length; i += dir) {
+    if (!items[i].header) return i
+  }
+  return from
+}
+
+function firstRow(items) {
+  for (var i = 0; i < items.length; i++) if (!items[i].header) return i
+  return -1
 }
 
 function duration(startsAt, nowMs) {
@@ -89,7 +150,7 @@ function duration(startsAt, nowMs) {
   return Math.floor(h / 24) + "d " + (h % 24) + "h"
 }
 
-// Silence body for POST /api/alertmanager/grafana/api/v2/silences matching this exact alert.
+// Silence body for POST <apiBase>/silences matching this exact alert.
 function silenceBody(row, minutes, nowMs, author) {
   var matchers = []
   for (var key in row.labels) {
@@ -104,20 +165,33 @@ function silenceBody(row, minutes, nowMs, author) {
   }
 }
 
-// Demo data in the real API shape. "Payment latency" flaps every 2 minutes so notifications
-// and the badge can be seen changing without a Grafana instance.
-function demoAlerts(nowMs, silencedFingerprints) {
+var DEMO_INSTANCES = [
+  { name: "prod", type: "grafana", url: "https://grafana.example.com", tokenFile: "" },
+  { name: "staging", type: "alertmanager", url: "https://alertmanager.staging.example.com", tokenFile: "" }
+]
+
+// Demo data in the real API shape, for the two DEMO_INSTANCES. Every 2 minutes "Payment latency" starts
+// firing in prod while staging goes unreachable (null), so notifications, the badge and the
+// unreachable mark can all be seen without a real instance. `silencedKeys` holds row keys.
+function demoAlerts(nowMs, silencedKeys, instance) {
+  var phase = Math.floor(nowMs / 120000) % 2 === 0
   function ago(min) { return new Date(nowMs - min * 60000).toISOString() }
   function alert(fp, labels, annotations, startedMinAgo) {
-    var silenced = !!(silencedFingerprints && silencedFingerprints[fp])
+    var silenced = !!(silencedKeys && silencedKeys[instance + "/" + fp])
     return {
       fingerprint: fp,
       labels: labels,
       annotations: annotations,
       startsAt: ago(startedMinAgo),
-      generatorURL: "https://grafana.example.com/alerting/grafana/" + fp + "/view",
+      generatorURL: instance === "prod" ? "https://grafana.example.com/alerting/grafana/" + fp + "/view"
+        : "https://prometheus.staging.example.com/graph",
       status: { state: silenced ? "suppressed" : "active" }
     }
+  }
+  if (instance === "staging") {
+    if (phase) return null
+    return [alert("demo-queue", { alertname: "Queue backlog", severity: "warning", queue: "emails", env: "staging" },
+      { summary: "12k messages waiting for 20m" }, 20)]
   }
   var list = [
     alert("demo-disk", { alertname: "Disk almost full", severity: "critical", instance: "db-01:9100", mountpoint: "/var/lib/postgresql" },
@@ -127,7 +201,7 @@ function demoAlerts(nowMs, silencedFingerprints) {
     alert("demo-cert", { alertname: "TLS certificate expires soon", severity: "info", host: "api.example.com" },
       { summary: "Certificate expires in 9 days" }, 60 * 26)
   ]
-  if (Math.floor(nowMs / 120000) % 2 === 0) {
+  if (phase) {
     list.push(alert("demo-latency", { alertname: "Payment latency p99", severity: "critical", service: "payments", env: "prod" },
       { summary: "p99 1.9s over 5m (threshold 1s)" }, 1))
   }

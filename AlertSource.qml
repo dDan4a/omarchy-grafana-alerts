@@ -3,61 +3,134 @@ import Quickshell
 import Quickshell.Io
 import "Alerts.js" as Alerts
 
-// Polls Grafana-managed alerts (or generates demo ones) and raises desktop notifications for new ones.
-// Loaded once as the plugin's service: every monitor's bar widget shares it, so there is one poll
-// and one notification per alert no matter how many bars are on screen.
+// Polls every configured Grafana / Alertmanager instance (or generates demo alerts) and raises desktop
+// notifications for new ones. Loaded once as the plugin's service: every monitor's bar widget shares it,
+// so there is one poll and one notification per alert no matter how many bars are on screen.
 Item {
   id: root
 
+  property string instancesFile: ""
   property string grafanaUrl: ""
   property string tokenFile: ""
   property int intervalSec: 60
   property bool notify: true
-  // Demo mode needs no Grafana: it is on whenever no URL is configured.
-  readonly property bool demo: grafanaUrl.trim() === ""
 
-  property var rows: []
+  // Parsed instances.json, or the legacy grafanaUrl as one instance; empty means demo mode.
+  property var configured: []
+  property string configError: ""
+  readonly property bool demo: configured.length === 0 && configError === ""
+  readonly property var instances: demo ? Alerts.DEMO_INSTANCES : configured
+
+  property var rowsByInstance: ({})
+  property var errors: ({})
+  property var known: ({})
+  readonly property var rows: {
+    var all = []
+    for (var i = 0; i < instances.length; i++) all = all.concat(rowsByInstance[instances[i].name] || [])
+    return all
+  }
   readonly property var summary: Alerts.summarize(rows)
-  property string error: ""
+  // One line for the bar tooltip and the panel status: what is broken, if anything.
+  readonly property string error: {
+    if (configError !== "") return configError
+    var parts = []
+    for (var i = 0; i < instances.length; i++) {
+      var e = errors[instances[i].name]
+      if (e) parts.push(instances.length > 1 ? instances[i].name + ": " + e : e)
+    }
+    return parts.join("; ")
+  }
   property double updatedAt: 0
   property double now: Date.now()
 
-  property var known: null
   property var demoSilences: ({})
 
-  readonly property string baseUrl: grafanaUrl.trim().replace(/\/+$/, "")
-  readonly property string tokenPath: tokenFile.replace(/^~(?=\/)/, Quickshell.env("HOME"))
+  // The token is read inside sh and handed to curl on stdin, so it never shows up in argv / ps.
+  // An empty token file ($1) sends no Authorization header: a plain Alertmanager often has none.
+  // The remaining arguments go to curl.
+  readonly property string curlScript:
+    'set -e; f=$1; shift; t=""; if [ -n "$f" ]; then t=$(cat "$f"); fi; ' +
+    'if [ -n "$t" ]; then printf \'header = "Authorization: Bearer %s"\\n\' "$t"; fi | ' +
+    'curl -sS --fail-with-body --max-time 10 -K - "$@"'
 
-  function refresh() {
-    if (demo) {
-      apply(Alerts.demoAlerts(Date.now(), demoSilences))
-      return
-    }
-    if (fetchProcess.running) return
-    // The token is read inside sh and handed to curl on stdin, so it never shows up in argv / ps.
-    fetchProcess.command = ["sh", "-c",
-      'set -e; t=$(cat "$1"); printf \'header = "Authorization: Bearer %s"\\n\' "$t" | ' +
-      'curl -sS --fail-with-body --max-time 10 -K - "$2"',
-      "sh", tokenPath, baseUrl + "/api/alertmanager/grafana/api/v2/alerts?active=true&inhibited=false"]
-    fetchProcess.running = true
+  function expandHome(p) { return String(p || "").replace(/^~(?=\/)/, Quickshell.env("HOME")) }
+  function instanceNamed(name) {
+    for (var i = 0; i < instances.length; i++) if (instances[i].name === name) return instances[i]
+    return null
   }
 
-  function apply(raw) {
-    var next = Alerts.normalize(raw)
+  // Re-reading instances.json on every poll picks up a file created or edited after start;
+  // the FileView handlers then poll the instances.
+  function refresh() { instancesView.reload() }
+
+  function loadInstances(text) {
+    var next = [], err = ""
+    try {
+      next = Alerts.parseInstances(text, grafanaUrl, tokenFile)
+    } catch (e) {
+      err = "instances.json: " + e.message
+    }
+    if (JSON.stringify(next) !== JSON.stringify(configured) || err !== configError) {
+      configured = next
+      configError = err
+      rowsByInstance = {}
+      errors = {}
+      known = {}
+    }
+    poll()
+  }
+
+  function poll() {
+    if (demo) {
+      for (var i = 0; i < instances.length; i++) {
+        var raw = Alerts.demoAlerts(Date.now(), demoSilences, instances[i].name)
+        if (raw === null) fail(instances[i].name, "demo: connection refused", "")
+        else apply(instances[i].name, raw)
+      }
+      return
+    }
+    for (var j = 0; j < fetchers.count; j++) {
+      var f = fetchers.objectAt(j)
+      if (f && !f.running) f.running = true
+    }
+  }
+
+  function apply(name, raw) {
+    var next = Alerts.normalize(raw, name)
     if (notify) {
-      var fresh = Alerts.newAlerts(next, known)
+      var fresh = Alerts.newAlerts(next, known[name] === undefined ? null : known[name])
       for (var i = 0; i < fresh.length; i++) notifyAlert(fresh[i])
     }
-    known = Alerts.fingerprints(next)
-    rows = next
-    error = ""
+    set("known", name, Alerts.fingerprints(next))
+    set("rowsByInstance", name, next)
+    set("errors", name, "")
     updatedAt = Date.now()
   }
 
+  // An unreachable instance loses its rows but keeps `known`, so its alerts are not
+  // announced again when it comes back.
+  function fail(name, stdout, stderr) {
+    set("errors", name, errorText(stdout, stderr))
+    set("rowsByInstance", name, [])
+  }
+
+  function errorText(stdout, stderr) {
+    var msg = (stderr || stdout || "request failed").trim().split("\n")[0]
+    return msg.length > 160 ? msg.slice(0, 157) + "..." : msg
+  }
+
+  // Maps are replaced, not mutated, so bindings on them re-evaluate.
+  function set(prop, name, value) {
+    var m = Object.assign({}, root[prop])
+    m[name] = value
+    root[prop] = m
+  }
+
   function notifyAlert(row) {
-    Quickshell.execDetached(["notify-send", "--app-name=Grafana",
+    var body = row.summary || row.labelText
+    Quickshell.execDetached(["notify-send", "--app-name=Grafana Alerts",
       "-u", row.severity === "critical" ? "critical" : "normal",
-      "--", row.name, row.summary || row.labelText])
+      "--", row.name, instances.length > 1 ? "[" + row.instance + "] " + body : body])
   }
 
   function openAlert(row) {
@@ -67,27 +140,33 @@ Item {
   function silence(row, minutes) {
     if (demo) {
       var s = Object.assign({}, demoSilences)
-      s[row.fingerprint] = true
+      s[row.key] = true
       demoSilences = s
-      refresh()
+      poll()
       return
     }
-    if (silenceProcess.running) return
-    silenceProcess.command = ["sh", "-c",
-      'set -e; t=$(cat "$1"); printf \'header = "Authorization: Bearer %s"\\n\' "$t" | ' +
-      'curl -sS --fail-with-body --max-time 10 -K - -H "Content-Type: application/json" --data-binary "$3" "$2"',
-      "sh", tokenPath, baseUrl + "/api/alertmanager/grafana/api/v2/silences",
-      JSON.stringify(Alerts.silenceBody(row, minutes, Date.now(), Quickshell.env("USER")))]
+    var inst = instanceNamed(row.instance)
+    if (!inst || silenceProcess.running) return
+    silenceProcess.instance = inst.name
+    silenceProcess.command = ["sh", "-c", curlScript, "sh", expandHome(inst.tokenFile),
+      "-H", "Content-Type: application/json",
+      "--data-binary", JSON.stringify(Alerts.silenceBody(row, minutes, Date.now(), Quickshell.env("USER"))),
+      Alerts.apiBase(inst) + "/silences"]
     silenceProcess.running = true
   }
 
-  function failure(stdout, stderr) {
-    var msg = (stderr || stdout || "request failed").trim().split("\n")[0]
-    error = msg.length > 160 ? msg.slice(0, 157) + "..." : msg
-  }
+  onGrafanaUrlChanged: refresh()
+  onTokenFileChanged: refresh()
 
-  onGrafanaUrlChanged: { known = null; refresh() }
-  Component.onCompleted: refresh()
+  FileView {
+    id: instancesView
+    path: root.expandHome(root.instancesFile)
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.loadInstances(text())
+    onLoadFailed: root.loadInstances(null)
+  }
 
   IpcHandler {
     target: "dan4a.grafana-alerts"
@@ -109,28 +188,37 @@ Item {
     onTriggered: root.now = Date.now()
   }
 
-  Process {
-    id: fetchProcess
-    stdout: StdioCollector { id: fetchOut; waitForEnd: true }
-    stderr: StdioCollector { id: fetchErr; waitForEnd: true }
-    onExited: function(exitCode) {
-      var out = String(fetchOut.text || "")
-      if (exitCode !== 0) { root.failure(out, String(fetchErr.text || "")); return }
-      try {
-        root.apply(JSON.parse(out))
-      } catch (e) {
-        root.failure("unexpected response: " + out.slice(0, 80), "")
+  // One fetch process per configured instance, so a slow or dead instance does not hold up the others.
+  Instantiator {
+    id: fetchers
+    model: root.configured
+    delegate: Process {
+      required property var modelData
+      command: ["sh", "-c", root.curlScript, "sh", root.expandHome(modelData.tokenFile),
+        Alerts.apiBase(modelData) + "/alerts?active=true&inhibited=false"]
+      stdout: StdioCollector { id: fetchOut; waitForEnd: true }
+      stderr: StdioCollector { id: fetchErr; waitForEnd: true }
+      onExited: function(exitCode) {
+        var out = String(fetchOut.text || "")
+        if (exitCode !== 0) { root.fail(modelData.name, out, String(fetchErr.text || "")); return }
+        try {
+          root.apply(modelData.name, JSON.parse(out))
+        } catch (e) {
+          root.fail(modelData.name, "unexpected response: " + out.slice(0, 80), "")
+        }
       }
     }
   }
 
   Process {
     id: silenceProcess
+    property string instance: ""
     stdout: StdioCollector { id: silenceOut; waitForEnd: true }
     stderr: StdioCollector { id: silenceErr; waitForEnd: true }
+    // A failed silence keeps the rows and shows the error until the next poll.
     onExited: function(exitCode) {
-      if (exitCode !== 0) root.failure(String(silenceOut.text || ""), String(silenceErr.text || ""))
-      root.refresh()
+      if (exitCode !== 0) root.set("errors", instance, "silence: " + root.errorText(String(silenceOut.text || ""), String(silenceErr.text || "")))
+      else root.poll()
     }
   }
 }

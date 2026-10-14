@@ -1,12 +1,13 @@
 # Grafana Alerts for Omarchy
 
-Firing Grafana alerts in the Omarchy bar.
+Firing alerts from Grafana and Prometheus Alertmanager in the Omarchy bar.
 
-- The bell turns red when something critical fires and shows how many alerts need attention.
-- Click it for the list of alerts with severity, duration, summary and labels.
+- The bell turns red when something critical fires and shows how many alerts need attention, across all instances.
+- Click it for the list of alerts with severity, duration, summary and labels, grouped by instance.
+- **Several instances**: prod and staging Grafana, a plain Alertmanager. One that is down is marked in the panel; the others keep working.
 - A desktop notification fires for every new alert.
-- Silence an alert for an hour, or open it in Grafana, with one click or one key.
-- **Demo mode** works without a Grafana instance and runs until you set a URL.
+- Silence an alert for an hour, or open its source, with one click or one key. Both go to the instance the alert came from.
+- **Demo mode** works without any server and runs until you configure one.
 
 ## Install
 
@@ -14,7 +15,7 @@ Firing Grafana alerts in the Omarchy bar.
 omarchy plugin add https://github.com/dDan4a/omarchy-grafana-alerts.git --enable --yes
 ```
 
-The plugin starts in demo mode. Set it up to connect to your Grafana:
+The plugin starts in demo mode with two fake instances. Set it up to connect to your Grafana:
 
 1. Create a **service account** in Grafana (Administration → Service accounts) with the Viewer role.
    To silence alerts from the bar, the account also needs `alert.silences:create`.
@@ -24,6 +25,34 @@ The plugin starts in demo mode. Set it up to connect to your Grafana:
    install -m 600 /dev/stdin ~/.config/grafana-alerts/token <<< 'glsa_...'
    ```
 3. Set **Grafana URL** in the widget settings (bar settings → Grafana Alerts), for example `https://grafana.example.com`.
+
+That is enough for one Grafana. For several, or for Alertmanager, list them in an instances file.
+
+### Several instances and Alertmanager
+
+Create `~/.config/grafana-alerts/instances.json` (the path is the **Instances file** setting):
+
+```json
+[
+  { "name": "prod", "type": "grafana", "url": "https://grafana.example.com", "tokenFile": "~/.config/grafana-alerts/prod.token" },
+  { "name": "staging", "type": "grafana", "url": "https://grafana.staging.example.com", "tokenFile": "~/.config/grafana-alerts/staging.token" },
+  { "name": "infra", "type": "alertmanager", "url": "http://alertmanager.internal:9093" }
+]
+```
+
+| Field | |
+|---|---|
+| `name` | Shown in the panel and in notifications. Must be unique. |
+| `type` | `grafana` (Grafana-managed alerts) or `alertmanager` (Prometheus Alertmanager). Default `grafana`. |
+| `url` | Base URL. Grafana: `https://grafana.example.com`; Alertmanager: `http://host:9093`. |
+| `tokenFile` | Optional for Alertmanager. A file with a bearer token; without it no `Authorization` header is sent. |
+
+When the file exists it wins and the Grafana URL setting is ignored. When it doesn't, a set Grafana URL counts as one
+instance named `default`, so existing setups keep working. With neither, the plugin runs in demo mode.
+The file is re-read on every refresh, so edits apply without restarting the shell. A malformed file shows its error in
+the panel instead of falling back to demo mode.
+
+Alertmanager behind basic auth or mTLS is not supported yet.
 
 The token never goes into `shell.json`. The plugin reads it inside `sh` and passes it to `curl` on stdin,
 so it doesn't appear in the process list either.
@@ -35,7 +64,7 @@ With the panel open:
 | Key | Action |
 |---|---|
 | `↑` / `↓` | Select an alert |
-| `Enter` | Open the selected alert in Grafana |
+| `Enter` | Open the selected alert's source (its `generatorURL`) |
 | `s` | Silence the selected alert for 1 hour |
 | `r` | Refresh now |
 
@@ -48,9 +77,12 @@ omarchy-shell dan4a.grafana-alerts refresh
 
 ## How it works
 
-The plugin polls `GET /api/alertmanager/grafana/api/v2/alerts?active=true&inhibited=false`, which returns Grafana-managed alerts.
+Grafana and Alertmanager speak the same Alertmanager API v2, under a different prefix: `/api/alertmanager/grafana/api/v2`
+for Grafana, `/api/v2` for Alertmanager. Every instance is polled in parallel with
+`GET <prefix>/alerts?active=true&inhibited=false`; a slow or dead one does not hold up the others.
 Severity comes from the `severity` label: `critical`/`high`, `warning`, and everything else counts as info.
-A silence is created with `POST /api/alertmanager/grafana/api/v2/silences` and matches all labels of that one alert.
+A silence is created with `POST <prefix>/silences` on the alert's own instance and matches all labels of that one alert.
+Alerts are told apart by instance and fingerprint, so the same alert in prod and staging notifies twice.
 
 Polling, notifications and silences live in a single `service` (`AlertSource.qml`, `keepLoaded`). The bar widget on every
 monitor reads that one instance through `bar.shell.serviceFor(...)`. With two monitors you therefore get one poll and one
@@ -59,7 +91,7 @@ notification per alert, not two.
 ## Development
 
 ```bash
-node tests/alerts.test.js                 # pure logic: parsing, ordering, durations, silences, demo data
+node tests/alerts.test.js                 # pure logic: instances, parsing, ordering, grouping, silences, demo data
 ln -s "$PWD" ~/.config/omarchy/plugins/dan4a.grafana-alerts
 omarchy plugin enable dan4a.grafana-alerts
 ```

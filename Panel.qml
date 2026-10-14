@@ -19,10 +19,13 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   readonly property var rows: source ? source.rows : []
+  // Rows grouped by instance, with a header per instance when there are several.
+  readonly property var items: source ? Alerts.panelItems(source.instances, source.rowsByInstance, source.errors) : []
+  readonly property var current: selected >= 0 && selected < items.length && !items[selected].header ? items[selected] : null
   readonly property var summary: source ? source.summary : Alerts.summarize([])
   property int selected: 0
 
-  function open() { root.selected = 0; root.controller.show() }
+  function open() { root.selected = Alerts.firstRow(root.items); root.controller.show() }
   function close() { root.controller.hide() }
   function toggle() { root.opened ? root.close() : root.open() }
   function switchPanel(direction) {
@@ -53,10 +56,15 @@ Panel {
     if (!source) return ""
     if (source.error !== "") return source.error
     var updated = source.updatedAt > 0 ? "Updated " + Alerts.duration(new Date(source.updatedAt).toISOString(), source.now) + " ago" : "Loading…"
-    return source.demo ? updated + " · set grafanaUrl in the widget settings to connect" : updated
+    return source.demo ? updated + " · demo: create instances.json or set the Grafana URL in the widget settings" : updated
   }
 
-  onRowsChanged: if (selected >= rows.length) selected = Math.max(0, rows.length - 1)
+  onItemsChanged: if (!current) selected = Alerts.firstRow(items)
+
+  function headerText(item) {
+    if (item.error !== "") return item.instance + " · unreachable: " + item.error
+    return item.instance + " · " + (item.count > 0 ? item.count + " firing" : "all quiet")
+  }
 
   KeyboardPanel {
     id: panel
@@ -72,18 +80,18 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       onMoveRequested: function(dx, dy) {
-        if (root.rows.length === 0) return
-        root.selected = Math.max(0, Math.min(root.rows.length - 1, root.selected + dy))
+        if (!root.current) return
+        root.selected = Alerts.step(root.items, root.selected, dy)
         list.positionViewAtIndex(root.selected, ListView.Contain)
       }
-      onActivateRequested: if (root.rows.length > 0) root.source.openAlert(root.rows[root.selected])
+      onActivateRequested: if (root.current) root.source.openAlert(root.current)
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
         var key = text.toLowerCase()
         if (key === "r") root.source.refresh()
-        else if (key === "s" && root.rows.length > 0 && !root.rows[root.selected].silenced)
-          root.source.silence(root.rows[root.selected], 60)
+        else if (key === "s" && root.current && !root.current.silenced)
+          root.source.silence(root.current, 60)
       }
 
       Column {
@@ -132,114 +140,142 @@ Panel {
 
         ListView {
           id: list
-          visible: root.rows.length > 0
+          visible: root.items.length > 0
           width: parent.width
           height: Math.min(contentHeight, Style.space(420))
           clip: true
           spacing: Style.space(4)
-          model: root.rows
+          model: root.items
           boundsBehavior: Flickable.StopAtBounds
 
-          delegate: Rectangle {
-            id: rowItem
+          delegate: Loader {
+            id: itemLoader
             required property var modelData
             required property int index
-            readonly property bool isSelected: index === root.selected
-
             width: ListView.view.width
-            height: rowColumn.implicitHeight + Style.space(12)
-            radius: Style.space(6)
-            color: isSelected || hover.hovered ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08) : "transparent"
-            opacity: modelData.silenced ? 0.55 : 1
+            sourceComponent: modelData.header ? headerComponent : rowComponent
+          }
 
-            HoverHandler { id: hover }
-            TapHandler {
-              onTapped: { root.selected = rowItem.index; root.source.openAlert(rowItem.modelData) }
+          Component {
+            id: headerComponent
+            Text {
+              readonly property var modelData: parent ? parent.modelData : ({})
+              width: parent ? parent.width : 0
+              text: root.headerText(modelData)
+              color: modelData.error ? Color.urgent : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              topPadding: Style.space(6)
+              leftPadding: Style.space(8)
+              elide: Text.ElideRight
+              textFormat: Text.PlainText
             }
+          }
 
+          Component {
+            id: rowComponent
             Rectangle {
-              id: dot
-              width: Style.space(8)
-              height: width
-              radius: width / 2
-              color: root.severityColor(rowItem.modelData)
-              anchors.left: parent.left
-              anchors.leftMargin: Style.space(8)
-              y: Style.space(6) + nameText.height / 2 - height / 2
-            }
+              id: rowItem
+              readonly property var modelData: parent ? parent.modelData : ({})
+              readonly property int index: parent ? parent.index : -1
+              readonly property bool isSelected: index === root.selected
 
-            Column {
-              id: rowColumn
-              anchors.left: dot.right
-              anchors.leftMargin: Style.space(8)
-              anchors.right: actions.left
-              anchors.rightMargin: Style.space(6)
-              y: Style.space(6)
-              spacing: Style.space(2)
+              width: parent ? parent.width : 0
+              height: rowColumn.implicitHeight + Style.space(12)
+              radius: Style.space(6)
+              color: isSelected || hover.hovered ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08) : "transparent"
+              opacity: modelData.silenced ? 0.55 : 1
 
-              Text {
-                id: nameText
-                width: parent.width
-                text: rowItem.modelData.name + (rowItem.modelData.silenced ? "  (silenced)" : "")
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.subtitle
-                font.bold: true
-                elide: Text.ElideRight
-                textFormat: Text.PlainText
+              HoverHandler { id: hover }
+              TapHandler {
+                onTapped: { root.selected = rowItem.index; root.source.openAlert(rowItem.modelData) }
               }
-              Text {
-                visible: text !== ""
-                width: parent.width
-                text: rowItem.modelData.summary
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.body
-                wrapMode: Text.Wrap
-                maximumLineCount: 2
-                elide: Text.ElideRight
-                textFormat: Text.PlainText
-              }
-              Text {
-                visible: text !== ""
-                width: parent.width
-                text: rowItem.modelData.labelText
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                elide: Text.ElideRight
-                textFormat: Text.PlainText
-              }
-            }
 
-            Row {
-              id: actions
-              anchors.right: parent.right
-              anchors.rightMargin: Style.space(4)
-              y: Style.space(4)
-              spacing: Style.space(2)
+              Rectangle {
+                id: dot
+                width: Style.space(8)
+                height: width
+                radius: width / 2
+                color: root.severityColor(rowItem.modelData)
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(8)
+                y: Style.space(6) + nameText.height / 2 - height / 2
+              }
 
-              Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: root.source ? Alerts.duration(rowItem.modelData.startsAt, root.source.now) : ""
-                color: root.dim
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-                rightPadding: Style.space(4)
+              Column {
+                id: rowColumn
+                anchors.left: dot.right
+                anchors.leftMargin: Style.space(8)
+                anchors.right: actions.left
+                anchors.rightMargin: Style.space(6)
+                y: Style.space(6)
+                spacing: Style.space(2)
+
+                Text {
+                  id: nameText
+                  width: parent.width
+                  text: rowItem.modelData.name + (rowItem.modelData.silenced ? "  (silenced)" : "")
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.subtitle
+                  font.bold: true
+                  elide: Text.ElideRight
+                  textFormat: Text.PlainText
+                }
+                Text {
+                  visible: text !== ""
+                  width: parent.width
+                  text: rowItem.modelData.summary
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                  wrapMode: Text.Wrap
+                  maximumLineCount: 2
+                  elide: Text.ElideRight
+                  textFormat: Text.PlainText
+                }
+                Text {
+                  visible: text !== ""
+                  width: parent.width
+                  text: rowItem.modelData.labelText
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                  textFormat: Text.PlainText
+                }
               }
-              PanelActionButton {
-                visible: !rowItem.modelData.silenced
-                iconText: "󰂛" // nf-md-bell_off
-                tooltipText: "Silence for 1 hour (s)"
-                foreground: root.foreground
-                onClicked: root.source.silence(rowItem.modelData, 60)
-              }
-              PanelActionButton {
-                visible: rowItem.modelData.url !== ""
-                iconText: "󰏌" // nf-md-open_in_new
-                tooltipText: "Open in Grafana (Enter)"
-                foreground: root.foreground
-                onClicked: root.source.openAlert(rowItem.modelData)
+
+              Row {
+                id: actions
+                anchors.right: parent.right
+                anchors.rightMargin: Style.space(4)
+                y: Style.space(4)
+                spacing: Style.space(2)
+
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: root.source ? Alerts.duration(rowItem.modelData.startsAt, root.source.now) : ""
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  rightPadding: Style.space(4)
+                }
+                PanelActionButton {
+                  visible: !rowItem.modelData.silenced
+                  iconText: "󰂛" // nf-md-bell_off
+                  tooltipText: "Silence for 1 hour (s)"
+                  foreground: root.foreground
+                  onClicked: root.source.silence(rowItem.modelData, 60)
+                }
+                PanelActionButton {
+                  visible: rowItem.modelData.url !== ""
+                  iconText: "󰏌" // nf-md-open_in_new
+                  tooltipText: "Open alert source (Enter)"
+                  foreground: root.foreground
+                  onClicked: root.source.openAlert(rowItem.modelData)
+                }
               }
             }
           }

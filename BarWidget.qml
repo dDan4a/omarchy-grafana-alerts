@@ -35,6 +35,7 @@ BarWidget {
   // Settings live on the bar widget entry; the service has none of its own, so push them in.
   function configureSource() {
     if (!source) return
+    source.instancesFile = String(setting("instancesFile", "~/.config/grafana-alerts/instances.json"))
     source.grafanaUrl = String(setting("grafanaUrl", ""))
     source.tokenFile = String(setting("tokenFile", "~/.config/grafana-alerts/token"))
     source.intervalSec = Number(setting("refreshIntervalSec", 60))
@@ -64,9 +65,9 @@ BarWidget {
     text: root.summary.total > 0 ? "󰂞 " + root.summary.total : "󰂚"
     foreground: root.summary.critical > 0 ? Color.urgent : (root.bar ? root.bar.barForeground : Color.foreground)
     dimmed: root.summary.total === 0 && root.error === ""
-    tooltipText: root.error !== "" ? "Grafana: " + root.error
-      : root.summary.total === 0 ? "Grafana: all quiet"
-      : "Grafana: " + root.summary.critical + " critical, " + root.summary.warning + " warning, " + root.summary.info + " info"
+    tooltipText: root.error !== "" ? "Alerts: " + root.error
+      : root.summary.total === 0 ? "Alerts: all quiet"
+      : "Alerts: " + root.summary.critical + " critical, " + root.summary.warning + " warning, " + root.summary.info + " info"
     onPressed: root.togglePanel()
   }
 }
