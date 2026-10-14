@@ -24,13 +24,48 @@ function displayLabels(labels) {
   return out
 }
 
+// One Alertmanager label matcher: `team=backend`, `severity=~critical|warning`, `env!="dev"`.
+// Returns { name, op, value }; throws on anything else, so a typo shows up as a config error
+// instead of silently matching nothing.
+var MATCHER_RE = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(=~|!~|!=|=)\s*(.*?)\s*$/
+
+function parseMatcher(text) {
+  var m = MATCHER_RE.exec(String(text))
+  if (!m) throw new Error("bad matcher " + JSON.stringify(text) + ", expected label=value, !=, =~ or !~")
+  var value = m[3]
+  if (value.length >= 2 && value[0] === '"' && value[value.length - 1] === '"') {
+    try { value = JSON.parse(value) } catch (e) { throw new Error("bad quoting in matcher " + text) }
+  }
+  if (m[2] === "=~" || m[2] === "!~") {
+    try { new RegExp(value) } catch (e) { throw new Error("bad regex in matcher " + text) }
+  }
+  return { name: m[1], op: m[2], value: value }
+}
+
+// Canonical form with a quoted value, which every Alertmanager matcher parser accepts.
+function matcherText(m) {
+  return m.name + m.op + '"' + m.value.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"'
+}
+
+// Same semantics as Alertmanager: regexes are anchored, a missing label is "".
+function matchesAll(labels, matchers) {
+  for (var i = 0; i < (matchers || []).length; i++) {
+    var m = matchers[i]
+    var v = String((labels && labels[m.name]) || "")
+    var hit = m.op === "=" || m.op === "!=" ? v === m.value : new RegExp("^(?:" + m.value + ")$").test(v)
+    if (hit !== (m.op === "=" || m.op === "=~")) return false
+  }
+  return true
+}
+
 // Instances come from instances.json. Without that file a configured grafanaUrl is one instance
 // named "default"; with neither, the result is empty and the service runs in demo mode.
 // Throws on malformed JSON or entries, so the panel can say what is wrong with the file.
 function parseInstances(text, legacyUrl, legacyTokenFile) {
   if (text === null || text === undefined) {
     var url = String(legacyUrl || "").trim()
-    return url === "" ? [] : [{ name: "default", type: "grafana", url: url.replace(/\/+$/, ""), tokenFile: String(legacyTokenFile || "") }]
+    if (url === "") return []
+    return [{ name: "default", type: "grafana", url: url.replace(/\/+$/, ""), tokenFile: String(legacyTokenFile || ""), matchers: [] }]
   }
   var list = JSON.parse(text)
   if (!Array.isArray(list)) throw new Error("expected a JSON array of instances")
@@ -44,13 +79,28 @@ function parseInstances(text, legacyUrl, legacyTokenFile) {
     if (type !== "grafana" && type !== "alertmanager") throw new Error(name + ": type must be grafana or alertmanager")
     if (seen[name]) throw new Error("duplicate instance name " + name)
     seen[name] = true
-    out.push({ name: name, type: type, url: base, tokenFile: String(e.tokenFile || "") })
+    if (e.matchers !== undefined && !Array.isArray(e.matchers)) throw new Error(name + ": matchers must be a list of strings")
+    var matchers = []
+    try {
+      for (var k = 0; k < (e.matchers || []).length; k++) matchers.push(parseMatcher(e.matchers[k]))
+    } catch (err) {
+      throw new Error(name + ": " + err.message)
+    }
+    out.push({ name: name, type: type, url: base, tokenFile: String(e.tokenFile || ""), matchers: matchers })
   }
   return out
 }
 
 function apiBase(instance) {
   return instance.url + (instance.type === "alertmanager" ? "/api/v2" : "/api/alertmanager/grafana/api/v2")
+}
+
+// GET URL for the active alerts of an instance; each matcher becomes its own filter= parameter.
+function alertsUrl(instance) {
+  var url = apiBase(instance) + "/alerts?active=true&inhibited=false"
+  var matchers = instance.matchers || []
+  for (var i = 0; i < matchers.length; i++) url += "&filter=" + encodeURIComponent(matcherText(matchers[i]))
+  return url
 }
 
 // Turns the raw API array of one instance into rows for the UI, most urgent and then oldest first.
@@ -118,7 +168,8 @@ function panelItems(instances, rowsByInstance, errors) {
     var name = instances[i].name
     var rows = rowsByInstance[name] || []
     if (instances.length > 1)
-      items.push({ header: true, key: "#" + name, instance: name, error: errors[name] || "", count: summarize(rows).total })
+      items.push({ header: true, key: "#" + name, instance: name, error: errors[name] || "", count: summarize(rows).total,
+        filter: (instances[i].matchers || []).map(matcherText).join(", ") })
     items = items.concat(rows)
   }
   return items
@@ -166,13 +217,15 @@ function silenceBody(row, minutes, nowMs, author) {
 }
 
 var DEMO_INSTANCES = [
-  { name: "prod", type: "grafana", url: "https://grafana.example.com", tokenFile: "" },
-  { name: "staging", type: "alertmanager", url: "https://alertmanager.staging.example.com", tokenFile: "" }
+  { name: "prod", type: "grafana", url: "https://grafana.example.com", tokenFile: "", matchers: [] },
+  { name: "staging", type: "alertmanager", url: "https://alertmanager.staging.example.com", tokenFile: "",
+    matchers: [parseMatcher("queue=~emails|billing")] }
 ]
 
 // Demo data in the real API shape, for the two DEMO_INSTANCES. Every 2 minutes "Payment latency" starts
 // firing in prod while staging goes unreachable (null), so notifications, the badge and the
 // unreachable mark can all be seen without a real instance. `silencedKeys` holds row keys.
+// The instance's matchers are applied here, as the server would: staging's filter drops "reports".
 function demoAlerts(nowMs, silencedKeys, instance) {
   var phase = Math.floor(nowMs / 120000) % 2 === 0
   function ago(min) { return new Date(nowMs - min * 60000).toISOString() }
@@ -190,8 +243,12 @@ function demoAlerts(nowMs, silencedKeys, instance) {
   }
   if (instance === "staging") {
     if (phase) return null
-    return [alert("demo-queue", { alertname: "Queue backlog", severity: "warning", queue: "emails", env: "staging" },
-      { summary: "12k messages waiting for 20m" }, 20)]
+    return [
+      alert("demo-queue", { alertname: "Queue backlog", severity: "warning", queue: "emails", env: "staging" },
+        { summary: "12k messages waiting for 20m" }, 20),
+      alert("demo-reports", { alertname: "Queue backlog", severity: "warning", queue: "reports", env: "staging" },
+        { summary: "Not ours, filtered out" }, 30)
+    ].filter(function(a) { return matchesAll(a.labels, DEMO_INSTANCES[1].matchers) })
   }
   var list = [
     alert("demo-disk", { alertname: "Disk almost full", severity: "critical", instance: "db-01:9100", mountpoint: "/var/lib/postgresql" },

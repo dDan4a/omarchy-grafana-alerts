@@ -36,7 +36,8 @@ Create `~/.config/grafana-alerts/instances.json` (the path is the **Instances fi
 [
   { "name": "prod", "type": "grafana", "url": "https://grafana.example.com", "tokenFile": "~/.config/grafana-alerts/prod.token" },
   { "name": "staging", "type": "grafana", "url": "https://grafana.staging.example.com", "tokenFile": "~/.config/grafana-alerts/staging.token" },
-  { "name": "infra", "type": "alertmanager", "url": "http://alertmanager.internal:9093" }
+  { "name": "infra", "type": "alertmanager", "url": "http://alertmanager.internal:9093",
+    "matchers": ["team=backend", "severity=~critical|warning"] }
 ]
 ```
 
@@ -46,11 +47,15 @@ Create `~/.config/grafana-alerts/instances.json` (the path is the **Instances fi
 | `type` | `grafana` (Grafana-managed alerts) or `alertmanager` (Prometheus Alertmanager). Default `grafana`. |
 | `url` | Base URL. Grafana: `https://grafana.example.com`; Alertmanager: `http://host:9093`. |
 | `tokenFile` | Optional for Alertmanager. A file with a bearer token; without it no `Authorization` header is sent. |
+| `matchers` | Optional. Show only alerts whose labels match all of these, in Alertmanager syntax: `=`, `!=`, `=~`, `!~` (regexes are anchored). Values may be quoted: `env!="dev"`. |
 
 When the file exists it wins and the Grafana URL setting is ignored. When it doesn't, a set Grafana URL counts as one
 instance named `default`, so existing setups keep working. With neither, the plugin runs in demo mode.
 The file is re-read on every refresh, so edits apply without restarting the shell. A malformed file shows its error in
 the panel instead of falling back to demo mode.
+
+Matchers are applied by the server, so silenced counts and notifications only cover what you see. The panel shows an
+instance's filter next to its name. In demo mode staging is filtered by `queue=~emails|billing`.
 
 Alertmanager behind basic auth or mTLS is not supported yet.
 
@@ -79,7 +84,7 @@ omarchy-shell dan4a.grafana-alerts refresh
 
 Grafana and Alertmanager speak the same Alertmanager API v2, under a different prefix: `/api/alertmanager/grafana/api/v2`
 for Grafana, `/api/v2` for Alertmanager. Every instance is polled in parallel with
-`GET <prefix>/alerts?active=true&inhibited=false`; a slow or dead one does not hold up the others.
+`GET <prefix>/alerts?active=true&inhibited=false`, plus one URL-encoded `filter=` per matcher; a slow or dead one does not hold up the others.
 Severity comes from the `severity` label: `critical`/`high`, `warning`, and everything else counts as info.
 A silence is created with `POST <prefix>/silences` on the alert's own instance and matches all labels of that one alert.
 Alerts are told apart by instance and fingerprint, so the same alert in prod and staging notifies twice.
@@ -91,7 +96,7 @@ notification per alert, not two.
 ## Development
 
 ```bash
-node tests/alerts.test.js                 # pure logic: instances, parsing, ordering, grouping, silences, demo data
+node tests/alerts.test.js                 # pure logic: instances, matchers, parsing, ordering, grouping, silences, demo data
 ln -s "$PWD" ~/.config/omarchy/plugins/dan4a.grafana-alerts
 omarchy plugin enable dan4a.grafana-alerts
 ```

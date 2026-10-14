@@ -195,7 +195,7 @@ Item {
     delegate: Process {
       required property var modelData
       command: ["sh", "-c", root.curlScript, "sh", root.expandHome(modelData.tokenFile),
-        Alerts.apiBase(modelData) + "/alerts?active=true&inhibited=false"]
+        Alerts.alertsUrl(modelData)]
       stdout: StdioCollector { id: fetchOut; waitForEnd: true }
       stderr: StdioCollector { id: fetchErr; waitForEnd: true }
       onExited: function(exitCode) {

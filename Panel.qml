@@ -62,8 +62,9 @@ Panel {
   onItemsChanged: if (!current) selected = Alerts.firstRow(items)
 
   function headerText(item) {
-    if (item.error !== "") return item.instance + " · unreachable: " + item.error
-    return item.instance + " · " + (item.count > 0 ? item.count + " firing" : "all quiet")
+    var name = item.filter !== "" ? item.instance + " {" + item.filter + "}" : item.instance
+    if (item.error !== "") return name + " · unreachable: " + item.error
+    return name + " · " + (item.count > 0 ? item.count + " firing" : "all quiet")
   }
 
   KeyboardPanel {

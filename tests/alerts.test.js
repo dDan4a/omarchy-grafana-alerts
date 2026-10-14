@@ -6,7 +6,7 @@ const path = require("path")
 // Alerts.js is a QML `.pragma library` file: drop the pragma and expose its functions.
 const src = fs.readFileSync(path.join(__dirname, "..", "Alerts.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const A = new Function(src + "; return { severityOf, displayLabels, parseInstances, apiBase, normalize, summarize, newAlerts, fingerprints, " +
-  "panelItems, step, firstRow, duration, silenceBody, demoAlerts, DEMO_INSTANCES }")()
+  "panelItems, step, parseMatcher, matcherText, matchesAll, alertsUrl, firstRow, duration, silenceBody, demoAlerts, DEMO_INSTANCES }")()
 
 const NOW = Date.parse("2026-10-10T12:00:00Z")
 
@@ -24,13 +24,36 @@ assert.deepStrictEqual(inst.map(i => [i.name, i.type, i.url, i.tokenFile]),
   [["prod", "grafana", "https://grafana.work", "~/t"], ["am", "alertmanager", "http://am:9093", ""]])
 assert.strictEqual(A.apiBase(inst[0]), "https://grafana.work/api/alertmanager/grafana/api/v2")
 assert.strictEqual(A.apiBase(inst[1]), "http://am:9093/api/v2")
-assert.deepStrictEqual(A.parseInstances(null, " https://g/ ", "~/tok"), [{ name: "default", type: "grafana", url: "https://g", tokenFile: "~/tok" }])
+assert.deepStrictEqual(A.parseInstances(null, " https://g/ ", "~/tok"), [{ name: "default", type: "grafana", url: "https://g", tokenFile: "~/tok", matchers: [] }])
 assert.deepStrictEqual(A.parseInstances(null, "", ""), [])
 assert.throws(() => A.parseInstances("{", "", ""))
 assert.throws(() => A.parseInstances("{}", "", ""), /array/)
 assert.throws(() => A.parseInstances('[{"name":"x"}]', "", ""), /url/)
 assert.throws(() => A.parseInstances('[{"name":"x","url":"u","type":"loki"}]', "", ""), /type/)
 assert.throws(() => A.parseInstances('[{"name":"x","url":"u"},{"name":"x","url":"v"}]', "", ""), /duplicate/)
+
+// matchers: Alertmanager syntax, quoted canonical form, anchored regexes, repeated filter= params
+assert.deepStrictEqual(A.parseMatcher(" team = backend "), { name: "team", op: "=", value: "backend" })
+assert.deepStrictEqual(A.parseMatcher('env!="dev \\"x\\""'), { name: "env", op: "!=", value: 'dev "x"' })
+assert.strictEqual(A.matcherText(A.parseMatcher('env!="dev \\"x\\""')), 'env!="dev \\"x\\""')
+assert.strictEqual(A.matcherText(A.parseMatcher("severity=~critical|warning")), 'severity=~"critical|warning"')
+assert.throws(() => A.parseMatcher("team"), /bad matcher/)
+assert.throws(() => A.parseMatcher("1x=y"), /bad matcher/)
+assert.throws(() => A.parseMatcher("x=~("), /regex/)
+const ms = ["severity=~critical|warning", "team!=ops", "env!~", "host=~.*"].map(A.parseMatcher)
+assert.ok(A.matchesAll({ severity: "critical", env: "prod", host: "a" }, ms))
+assert.ok(!A.matchesAll({ severity: "criticalish", env: "prod" }, ms))
+assert.ok(!A.matchesAll({ severity: "warning", team: "ops", env: "prod" }, ms))
+assert.ok(!A.matchesAll({ severity: "warning" }, ms))
+assert.ok(A.matchesAll({ any: "thing" }, []))
+const filtered = A.parseInstances(JSON.stringify([
+  { name: "am", type: "alertmanager", url: "http://am:9093", matchers: ["team=backend", "severity=~critical|warning"] },
+]), "", "")
+assert.strictEqual(A.alertsUrl(filtered[0]), "http://am:9093/api/v2/alerts?active=true&inhibited=false" +
+  "&filter=team%3D%22backend%22&filter=severity%3D~%22critical%7Cwarning%22")
+assert.strictEqual(A.alertsUrl(inst[0]), "https://grafana.work/api/alertmanager/grafana/api/v2/alerts?active=true&inhibited=false")
+assert.throws(() => A.parseInstances('[{"name":"x","url":"u","matchers":"team=a"}]', "", ""), /list/)
+assert.throws(() => A.parseInstances('[{"name":"x","url":"u","matchers":["team"]}]', "", ""), /^Error: x: bad matcher/)
 
 // normalize: order is silenced last, then severity, then oldest first
 const raw = [
@@ -64,6 +87,9 @@ const items = A.panelItems(two, { prod: rows.slice(0, 2) }, { staging: "timeout"
 assert.deepStrictEqual(items.map(i => i.header ? "#" + i.instance : i.key), ["#prod", "prod/c-old", "prod/c-new", "#staging"])
 assert.strictEqual(items[0].count, 2)
 assert.strictEqual(items[3].error, "timeout")
+assert.strictEqual(items[0].filter, "")
+assert.strictEqual(A.panelItems(filtered, {}, {})[0], undefined)
+assert.strictEqual(A.panelItems(filtered.concat(inst), {}, {})[0].filter, 'team="backend", severity=~"critical|warning"')
 assert.strictEqual(A.firstRow(items), 1)
 assert.strictEqual(A.step(items, 1, -1), 1)
 assert.strictEqual(A.step(items, 1, 1), 2)
@@ -90,7 +116,8 @@ const on = A.normalize(A.demoAlerts(0, {}, "prod"), "prod")
 const off = A.normalize(A.demoAlerts(120000, {}, "prod"), "prod")
 assert.strictEqual(on.length - off.length, 1)
 assert.strictEqual(A.demoAlerts(0, {}, "staging"), null)
-assert.strictEqual(A.normalize(A.demoAlerts(120000, {}, "staging"), "staging").length, 1)
+// staging's demo filter keeps the emails queue and drops reports
+assert.deepStrictEqual(A.normalize(A.demoAlerts(120000, {}, "staging"), "staging").map(r => r.labels.queue), ["emails"])
 const silenced = A.summarize(A.normalize(A.demoAlerts(120000, { "prod/demo-disk": true }, "prod"), "prod"))
 assert.strictEqual(silenced.silenced, 1)
 
