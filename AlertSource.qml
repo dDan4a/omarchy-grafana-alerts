@@ -60,6 +60,13 @@ Item {
   property var pendingErrors: ({})
   readonly property var grafanaInstances: configured.filter(function(i) { return i.type === "grafana" })
 
+  // OnCall schedules of Grafana instances with "oncall" on; a failure only marks the On-call section.
+  property var oncallByInstance: ({})
+  property var oncallErrors: ({})
+  readonly property var oncallInstances: configured.filter(function(i) { return !!i.oncall })
+  readonly property var oncall: Alerts.oncallView(instances, oncallByInstance, oncallErrors, now)
+  readonly property var oncallRange: Alerts.oncallRange(now)
+
   // The token is read inside sh and handed to curl on stdin, so it never shows up in argv / ps.
   // An empty token file ($1) sends no Authorization header: a plain Alertmanager often has none.
   // The remaining arguments go to curl.
@@ -67,6 +74,24 @@ Item {
     'set -e; f=$1; shift; t=""; if [ -n "$f" ]; then t=$(cat "$f"); fi; ' +
     'if [ -n "$t" ]; then printf \'header = "Authorization: Bearer %s"\\n\' "$t"; fi | ' +
     'curl -sS --fail-with-body --max-time 10 -K - "$@"'
+
+  // OnCall API with the instance's service account token (Bearer + X-Grafana-URL). Its URL comes from the IRM
+  // (or OSS OnCall) plugin settings unless $3 sets it. Prints { schedules, shifts: [{ id, shifts }] } with the final
+  // shifts of every schedule from $4 to $5. Args: token file, Grafana URL, OnCall URL or "", start date, end date.
+  // ponytail: first page only (100 schedules, 100 shifts each); follow `next` if that is ever too few.
+  readonly property string oncallScript:
+    'set -e; command -v jq >/dev/null || { echo "needs jq" >&2; exit 127; }; ' +
+    't=$(cat "$1"); g=$2; api=$3; ' +
+    'c() { printf \'header = "Authorization: Bearer %s"\\n\' "$t" | curl -sS --fail-with-body --max-time 10 -K - -H "X-Grafana-URL: $g" "$@"; }; ' +
+    'if [ -z "$api" ]; then for p in grafana-irm-app grafana-oncall-app; do ' +
+    'api=$(c "$g/api/plugins/$p/settings" 2>/dev/null | jq -r ".jsonData.onCallApiUrl // empty" 2>/dev/null) || api=""; ' +
+    '[ -n "$api" ] && break; done; fi; ' +
+    '[ -n "$api" ] || { echo "OnCall API URL not found: is Grafana IRM / OnCall enabled?" >&2; exit 1; }; ' +
+    'api=${api%/}; s=$(c "$api/api/v1/schedules/?perpage=100"); out=""; ' +
+    'for id in $(printf "%s" "$s" | jq -r ".results[].id"); do ' +
+    'r=$(c "$api/api/v1/schedules/$id/final_shifts?start_date=$4&end_date=$5&perpage=100"); ' +
+    'out="$out$(printf "%s" "$r" | jq -c --arg id "$id" "{id: \\$id, shifts: .results}")"; done; ' +
+    'printf "%s" "$out" | jq -s --argjson s "$(printf "%s" "$s" | jq -c .results)" "{schedules: \\$s, shifts: .}"'
 
   function expandHome(p) { return String(p || "").replace(/^~(?=\/)/, Quickshell.env("HOME")) }
   function instanceNamed(name) {
@@ -95,6 +120,8 @@ Item {
       silenceErrors = {}
       pendingByInstance = {}
       pendingErrors = {}
+      oncallByInstance = {}
+      oncallErrors = {}
     }
     poll()
   }
@@ -108,6 +135,7 @@ Item {
         var name = instances[i].name
         set("silencesByInstance", name, Alerts.normalizeSilences(demoSilences.filter(function(s) { return s.instance === name }), name))
         if (instances[i].type === "grafana") set("pendingByInstance", name, Alerts.normalizePending(Alerts.demoPending(Date.now(), name), instances[i]))
+        if (instances[i].oncall) set("oncallByInstance", name, Alerts.normalizeOncall(Alerts.demoOncall(Date.now(), name)))
       }
       return
     }
@@ -122,6 +150,10 @@ Item {
     for (var p = 0; p < pendingFetchers.count; p++) {
       var pf = pendingFetchers.objectAt(p)
       if (pf && !pf.running) pf.running = true
+    }
+    for (var o = 0; o < oncallFetchers.count; o++) {
+      var of = oncallFetchers.objectAt(o)
+      if (of && !of.running) of.running = true
     }
   }
 
@@ -311,6 +343,29 @@ Item {
         }
         root.set("pendingByInstance", modelData.name, Alerts.normalizePending(raw, modelData))
         root.set("pendingErrors", modelData.name, err)
+      }
+    }
+  }
+
+  Instantiator {
+    id: oncallFetchers
+    model: root.oncallInstances
+    delegate: Process {
+      required property var modelData
+      command: ["sh", "-c", root.oncallScript, "sh", root.expandHome(modelData.tokenFile), modelData.url, modelData.oncall.url,
+        root.oncallRange.from, root.oncallRange.to]
+      stdout: StdioCollector { id: oncallOut; waitForEnd: true }
+      stderr: StdioCollector { id: oncallErr; waitForEnd: true }
+      // A failed request keeps the last schedules, so a blip does not blank the section; the error is shown instead.
+      onExited: function(exitCode) {
+        var out = String(oncallOut.text || "")
+        if (exitCode !== 0) { root.set("oncallErrors", modelData.name, root.errorText(out, String(oncallErr.text || ""))); return }
+        try {
+          root.set("oncallByInstance", modelData.name, Alerts.normalizeOncall(JSON.parse(out)))
+          root.set("oncallErrors", modelData.name, "")
+        } catch (e) {
+          root.set("oncallErrors", modelData.name, "unexpected response: " + out.slice(0, 80))
+        }
       }
     }
   }

@@ -25,6 +25,7 @@ Panel {
       source.pendingByInstance, source.pendingErrors) : []
   readonly property var current: selected >= 0 && selected < items.length && !items[selected].header ? items[selected] : null
   readonly property var summary: source ? source.summary : Alerts.summarize([])
+  readonly property var oncall: source ? source.oncall : Alerts.oncallView([], {}, {}, 0)
   property int selected: 0
 
   function open() { root.selected = Alerts.firstRow(root.items); root.controller.show() }
@@ -177,6 +178,81 @@ Panel {
               foreground: root.foreground
               fontFamily: root.fontFamily
               onClicked: root.source.toggleDnd(0)
+            }
+          }
+        }
+
+        // On-call: only when an instance has OnCall on. Read-only, so it stays out of the keyboard-driven list.
+        PanelSeparator { visible: root.oncall.visible; width: parent.width }
+
+        Column {
+          visible: root.oncall.visible
+          width: parent.width
+          spacing: Style.space(4)
+
+          Text {
+            width: parent.width
+            text: "On-call" + (root.oncall.onCall ? " · you are on call" : "")
+            color: root.oncall.onCall ? Color.accent : root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+            leftPadding: Style.space(8)
+          }
+          Repeater {
+            model: root.oncall.rows
+            delegate: oncallLine
+          }
+          Text {
+            visible: root.oncall.hasUser
+            width: parent.width
+            text: "Your next shifts" + (root.oncall.next.length === 0 ? " · none in the next 14 days" : "")
+            color: root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+            topPadding: Style.space(4)
+            leftPadding: Style.space(8)
+          }
+          Repeater {
+            model: root.oncall.next
+            delegate: oncallLine
+          }
+        }
+
+        Component {
+          id: oncallLine
+          Item {
+            required property var modelData
+            width: parent ? parent.width : 0
+            height: Math.max(oncallTitle.implicitHeight, oncallText.implicitHeight)
+
+            Text {
+              id: oncallTitle
+              anchors.left: parent.left
+              anchors.leftMargin: Style.space(24)
+              width: Math.min(implicitWidth, parent.width * 0.4)
+              text: modelData.title
+              color: modelData.me ? Color.accent : root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              font.bold: modelData.me === true
+              elide: Text.ElideRight
+              textFormat: Text.PlainText
+            }
+            Text {
+              id: oncallText
+              anchors.left: oncallTitle.right
+              anchors.leftMargin: Style.space(12)
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(8)
+              text: modelData.text
+              color: modelData.error ? Color.urgent : modelData.me ? Color.accent : root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.body
+              horizontalAlignment: Text.AlignRight
+              elide: Text.ElideRight
+              textFormat: Text.PlainText
             }
           }
         }

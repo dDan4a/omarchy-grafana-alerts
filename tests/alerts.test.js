@@ -1,4 +1,5 @@
 // Run: node tests/alerts.test.js
+process.env.TZ = "UTC" // on-call times are shown in local time
 const assert = require("assert")
 const fs = require("fs")
 const path = require("path")
@@ -7,7 +8,8 @@ const path = require("path")
 const src = fs.readFileSync(path.join(__dirname, "..", "Alerts.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const A = new Function(src + "; return { severityOf, displayLabels, parseInstances, apiBase, normalize, summarize, newAlerts, fingerprints, " +
   "panelItems, step, parseMatcher, matcherText, matchesAll, alertsUrl, firstRow, duration, silenceBody, demoAlerts, DEMO_INSTANCES, " +
-  "remaining, silencesUrl, expireUrl, normalizeSilences, demoSilences, rulesUrl, normalizePending, demoPending, DND_FOREVER, dndActive, dndToggle, dndText, parseDnd, toNotify }")()
+  "remaining, silencesUrl, expireUrl, normalizeSilences, demoSilences, rulesUrl, normalizePending, demoPending, DND_FOREVER, dndActive, dndToggle, dndText, parseDnd, toNotify, " +
+  "oncallRange, normalizeOncall, oncallView, demoOncall }")()
 
 const NOW = Date.parse("2026-10-10T12:00:00Z")
 
@@ -25,7 +27,7 @@ assert.deepStrictEqual(inst.map(i => [i.name, i.type, i.url, i.tokenFile]),
   [["prod", "grafana", "https://grafana.work", "~/t"], ["am", "alertmanager", "http://am:9093", ""]])
 assert.strictEqual(A.apiBase(inst[0]), "https://grafana.work/api/alertmanager/grafana/api/v2")
 assert.strictEqual(A.apiBase(inst[1]), "http://am:9093/api/v2")
-assert.deepStrictEqual(A.parseInstances(null, " https://g/ ", "~/tok"), [{ name: "default", type: "grafana", url: "https://g", tokenFile: "~/tok", matchers: [] }])
+assert.deepStrictEqual(A.parseInstances(null, " https://g/ ", "~/tok"), [{ name: "default", type: "grafana", url: "https://g", tokenFile: "~/tok", matchers: [], oncall: null }])
 assert.deepStrictEqual(A.parseInstances(null, "", ""), [])
 assert.throws(() => A.parseInstances("{", "", ""))
 assert.throws(() => A.parseInstances("{}", "", ""), /array/)
@@ -222,5 +224,67 @@ assert.deepStrictEqual(A.toNotify(during, A.fingerprints(before), true, dnd1h, N
 assert.ok(A.toNotify(during, A.fingerprints(before), true, 0, NOW).length > 0)
 assert.deepStrictEqual(A.toNotify(during, A.fingerprints(before), false, 0, NOW), [])
 assert.deepStrictEqual(A.toNotify(during, A.fingerprints(during), true, dnd1h, NOW + HOUR), [])
+
+// oncall config: Grafana only, true or { user, url }
+const oc = A.parseInstances(JSON.stringify([
+  { name: "a", url: "https://g", oncall: true },
+  { name: "b", url: "https://h", oncall: { user: " Me@x.io ", url: "https://oncall/" } },
+  { name: "c", url: "https://i" },
+]), "", "")
+assert.deepStrictEqual(oc.map(i => i.oncall), [{ user: "", url: "" }, { user: "Me@x.io", url: "https://oncall" }, null])
+assert.throws(() => A.parseInstances('[{"name":"x","type":"alertmanager","url":"u","oncall":true}]', "", ""), /grafana/)
+assert.throws(() => A.parseInstances('[{"name":"x","url":"u","oncall":"yes"}]', "", ""), /oncall must be/)
+assert.deepStrictEqual(A.oncallRange(NOW), { from: "2026-10-09", to: "2026-10-24" })
+
+// final shifts: back-to-back shifts of one person merge, bad entries drop, schedules sort by name
+const fs_ = (who, from, to) => ({ user_email: who + "@x.io", user_username: who, shift_start: from, shift_end: to })
+const oncallRaw = {
+  schedules: [{ id: "S2", name: "Secondary" }, { id: "S1", name: "Primary" }],
+  shifts: [
+    { id: "S1", shifts: [fs_("me", "2026-10-10T10:00:00Z", "2026-10-10T14:00:00Z"), fs_("me", "2026-10-10T08:00:00Z", "2026-10-10T10:00:00Z"),
+      fs_("bob", "2026-10-10T14:00:00Z", "2026-10-11T08:00:00Z"), fs_("me", "2026-10-13T08:00:00+00:00", "2026-10-13T16:00:00+00:00"),
+      fs_("bad", "nope", "2026-10-10T14:00:00Z")] },
+    { id: "S2", shifts: [fs_("alice", "2026-10-10T00:00:00Z", "2026-10-11T00:00:00Z"), fs_("me", "2026-10-11T00:00:00Z", "2026-10-12T00:00:00Z")] },
+  ],
+}
+const sched = A.normalizeOncall(oncallRaw)
+assert.deepStrictEqual(sched.map(s => s.name), ["Primary", "Secondary"])
+assert.deepStrictEqual(sched[0].shifts.map(s => [s.username, s.start.slice(11, 16), s.end.slice(5, 16)]),
+  [["me", "08:00", "10-10T14:00"], ["bob", "14:00", "10-11T08:00"], ["me", "08:00", "10-13T16:00"]])
+assert.deepStrictEqual(A.normalizeOncall(null), [])
+
+// view: who is on call now and until when, my next two shifts, onCall for the bar
+const ocInst = [{ name: "prod", oncall: { user: "ME@x.io", url: "" } }, { name: "am", oncall: null }]
+const v = A.oncallView(ocInst, { prod: sched }, {}, NOW)
+assert.ok(v.visible && v.onCall && v.hasUser)
+assert.deepStrictEqual(v.rows.map(r => [r.title, r.me, r.text]), [
+  ["Primary", true, "you · until 14:00 · 2h 0m left"],
+  ["Secondary", false, "alice · until Sun 00:00 · 12h 0m left"],
+])
+assert.deepStrictEqual(v.current, ["Primary until 14:00"])
+assert.deepStrictEqual(v.next.map(n => [n.title, n.text]), [
+  ["Secondary", "Sun 00:00 – Mon 00:00 · in 12h 0m"],
+  ["Primary", "Tue 08:00 – Tue 16:00 · in 2d 20h"],
+])
+// after my shift: bob is on call, I am not; without a user there are no next shifts
+const later = A.oncallView(ocInst, { prod: sched }, {}, NOW + 3 * HOUR)
+assert.ok(!later.onCall)
+assert.strictEqual(later.rows[0].text, "bob · until Sun 08:00 · 17h 0m left")
+const anon = A.oncallView([{ name: "prod", oncall: { user: "", url: "" } }], { prod: sched }, {}, NOW)
+assert.ok(!anon.onCall && !anon.hasUser && anon.next.length === 0)
+assert.strictEqual(anon.rows[0].text, "me · until 14:00 · 2h 0m left")
+// nobody on call; several instances get prefixed titles; an error replaces that instance's rows only
+const gap = A.oncallView(ocInst, { prod: sched }, {}, Date.parse("2026-10-12T12:00:00Z"))
+assert.strictEqual(gap.rows[0].text, "nobody")
+const twoOc = A.oncallView([ocInst[0], { name: "stage", oncall: { user: "", url: "" } }], { prod: sched }, { stage: "HTTP 403" }, NOW)
+assert.deepStrictEqual(twoOc.rows.map(r => r.title), ["prod / Primary", "prod / Secondary", "stage"])
+assert.ok(twoOc.rows[2].error && twoOc.onCall)
+// no OnCall configured: nothing to show
+assert.deepStrictEqual(A.oncallView([{ name: "am", oncall: null }], {}, {}, NOW).visible, false)
+
+// demo: on call in prod Primary, next shifts listed, nothing for staging
+const dv = A.oncallView(A.DEMO_INSTANCES, { prod: A.normalizeOncall(A.demoOncall(NOW, "prod")) }, {}, NOW)
+assert.ok(dv.onCall && dv.next.length === 2)
+assert.strictEqual(A.demoOncall(NOW, "staging"), null)
 
 console.log("ok")

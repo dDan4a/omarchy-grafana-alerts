@@ -65,7 +65,7 @@ function parseInstances(text, legacyUrl, legacyTokenFile) {
   if (text === null || text === undefined) {
     var url = String(legacyUrl || "").trim()
     if (url === "") return []
-    return [{ name: "default", type: "grafana", url: url.replace(/\/+$/, ""), tokenFile: String(legacyTokenFile || ""), matchers: [] }]
+    return [{ name: "default", type: "grafana", url: url.replace(/\/+$/, ""), tokenFile: String(legacyTokenFile || ""), matchers: [], oncall: null }]
   }
   var list = JSON.parse(text)
   if (!Array.isArray(list)) throw new Error("expected a JSON array of instances")
@@ -86,9 +86,19 @@ function parseInstances(text, legacyUrl, legacyTokenFile) {
     } catch (err) {
       throw new Error(name + ": " + err.message)
     }
-    out.push({ name: name, type: type, url: base, tokenFile: String(e.tokenFile || ""), matchers: matchers })
+    out.push({ name: name, type: type, url: base, tokenFile: String(e.tokenFile || ""), matchers: matchers, oncall: parseOncall(e.oncall, name, type) })
   }
   return out
+}
+
+// `"oncall": true` or `{ "user": "me@example.com", "url": "https://oncall-..." }` on a Grafana instance; null when off.
+// `user` (email or username) picks out your own shifts, `url` overrides the OnCall API URL found in the plugin settings.
+function parseOncall(value, name, type) {
+  if (value === undefined || value === null || value === false) return null
+  if (type !== "grafana") throw new Error(name + ": oncall needs a grafana instance")
+  if (value !== true && (typeof value !== "object" || Array.isArray(value))) throw new Error(name + ": oncall must be true or an object")
+  var o = value === true ? {} : value
+  return { user: String(o.user || "").trim(), url: String(o.url || "").trim().replace(/\/+$/, "") }
 }
 
 function apiBase(instance) {
@@ -346,10 +356,119 @@ function silenceBody(row, minutes, nowMs, author) {
   }
 }
 
+// OnCall: the fetch script asks for final shifts from yesterday (so the shift running now is included) to 14 days ahead.
+var ONCALL_DAYS = 14
+
+function oncallRange(nowMs) {
+  function day(ms) { return new Date(ms).toISOString().slice(0, 10) }
+  return { from: day(nowMs - 86400000), to: day(nowMs + ONCALL_DAYS * 86400000) }
+}
+
+// Script output { schedules: [{ id, name }], shifts: [{ id, shifts: [final shift] }] } as schedules sorted by name,
+// each with its shifts sorted by start. Back-to-back or overlapping shifts of one person are merged, so "until"
+// is the end of the whole stretch, not of the first rotation layer.
+function normalizeOncall(raw) {
+  var byId = {}
+  var lists = (raw && raw.shifts) || []
+  for (var i = 0; i < lists.length; i++) if (lists[i]) byId[lists[i].id] = lists[i].shifts || []
+  var out = []
+  var schedules = (raw && raw.schedules) || []
+  for (var j = 0; j < schedules.length; j++) {
+    var s = schedules[j] || {}
+    out.push({ id: String(s.id), name: String(s.name || s.id), shifts: mergeShifts(byId[s.id] || []) })
+  }
+  out.sort(function(x, y) { return x.name < y.name ? -1 : x.name > y.name ? 1 : 0 })
+  return out
+}
+
+function mergeShifts(list) {
+  var shifts = []
+  for (var i = 0; i < list.length; i++) {
+    var x = list[i] || {}
+    var start = Date.parse(x.shift_start), end = Date.parse(x.shift_end)
+    if (!isFinite(start) || !isFinite(end) || end <= start) continue
+    shifts.push({ email: String(x.user_email || ""), username: String(x.user_username || ""), start: start, end: end })
+  }
+  shifts.sort(function(a, b) { return a.start - b.start })
+  var out = []
+  for (var k = 0; k < shifts.length; k++) {
+    var cur = shifts[k], merged = false
+    for (var m = out.length - 1; m >= 0 && !merged; m--) {
+      if (out[m].email === cur.email && out[m].username === cur.username && out[m].end >= cur.start) {
+        out[m].end = Math.max(out[m].end, cur.end)
+        merged = true
+      }
+    }
+    if (!merged) out.push(cur)
+  }
+  return out.map(function(s) {
+    return { email: s.email, username: s.username, start: new Date(s.start).toISOString(), end: new Date(s.end).toISOString() }
+  })
+}
+
+function isMe(shift, user) {
+  var u = String(user || "").toLowerCase()
+  return u !== "" && (shift.email.toLowerCase() === u || shift.username.toLowerCase() === u)
+}
+
+var WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+
+// Local time; the weekday is added when it is not today.
+function clock(iso, nowMs) {
+  var d = new Date(Date.parse(iso)), n = new Date(nowMs)
+  var hm = ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2)
+  return d.toDateString() === n.toDateString() ? hm : WEEKDAYS[d.getDay()] + " " + hm
+}
+
+// What the panel and the bar show for OnCall. `visible` is false when no instance has OnCall on, and then nothing
+// is shown at all. `rows`: per schedule who is on call now and until when, or a failed instance. `next`: your next
+// shifts (not the current one) across all schedules, when the instance has a `user`. `onCall`: you are on call now.
+function oncallView(instances, byInstance, errors, nowMs) {
+  var view = { visible: false, onCall: false, current: [], rows: [], next: [], hasUser: false }
+  var list = instances.filter(function(i) { return !!i.oncall })
+  if (list.length === 0) return view
+  view.visible = true
+  var multi = list.length > 1, mine = []
+  for (var i = 0; i < list.length; i++) {
+    var inst = list[i], user = inst.oncall.user
+    if (user !== "") view.hasUser = true
+    var err = (errors || {})[inst.name]
+    if (err) { view.rows.push({ error: true, title: inst.name, text: "could not load: " + err }); continue }
+    var schedules = (byInstance || {})[inst.name] || []
+    for (var j = 0; j < schedules.length; j++) {
+      var title = (multi ? inst.name + " / " : "") + schedules[j].name
+      var shifts = schedules[j].shifts
+      var now = shifts.filter(function(s) { return Date.parse(s.start) <= nowMs && nowMs < Date.parse(s.end) })
+      var me = now.filter(function(s) { return isMe(s, user) })
+      var end = now.map(function(s) { return s.end }).sort()[0]
+      view.rows.push({
+        title: title,
+        me: me.length > 0,
+        text: now.length === 0 ? "nobody"
+          : now.map(function(s) { return isMe(s, user) ? "you" : s.username || s.email }).join(", ")
+            + " · until " + clock(end, nowMs) + " · " + remaining(end, nowMs) + " left"
+      })
+      if (me.length > 0) {
+        view.onCall = true
+        view.current.push(title + " until " + clock(me[0].end, nowMs))
+      }
+      for (var k = 0; k < shifts.length; k++) {
+        if (isMe(shifts[k], user) && Date.parse(shifts[k].start) > nowMs) mine.push({ title: title, start: shifts[k].start, end: shifts[k].end })
+      }
+    }
+  }
+  mine.sort(function(x, y) { return x.start < y.start ? -1 : x.start > y.start ? 1 : 0 })
+  view.next = mine.slice(0, 2).map(function(s) {
+    return { title: s.title, text: clock(s.start, nowMs) + " – " + clock(s.end, nowMs) + " · in " + remaining(s.start, nowMs) }
+  })
+  return view
+}
+
 var DEMO_INSTANCES = [
-  { name: "prod", type: "grafana", url: "https://grafana.example.com", tokenFile: "", matchers: [] },
+  { name: "prod", type: "grafana", url: "https://grafana.example.com", tokenFile: "", matchers: [],
+    oncall: { user: "you@example.com", url: "" } },
   { name: "staging", type: "alertmanager", url: "https://alertmanager.staging.example.com", tokenFile: "",
-    matchers: [parseMatcher("queue=~emails|billing")] }
+    matchers: [parseMatcher("queue=~emails|billing")], oncall: null }
 ]
 
 // Demo silences in the API shape plus an `instance` field: one per instance to start with; silencing and
@@ -394,6 +513,24 @@ function demoPending(nowMs, instance) {
     ]))
   }
   return { status: "success", data: { groups: [{ name: "demo", file: "Demo", rules: rules }] } }
+}
+
+// Demo OnCall data in the shape the fetch script prints, for prod only. Shifts are laid on 8-hour blocks, so
+// "until" counts down: you are on call in Primary now, your next shifts are in Secondary and Primary again.
+function demoOncall(nowMs, instance) {
+  if (instance !== "prod") return null
+  var H = 3600000, base = Math.floor(nowMs / (8 * H)) * 8 * H
+  function shift(who, fromH, toH) {
+    return { user_pk: "U" + who, user_email: who + "@example.com", user_username: who,
+      shift_start: new Date(base + fromH * H).toISOString(), shift_end: new Date(base + toH * H).toISOString() }
+  }
+  return {
+    schedules: [{ id: "SPRIMARY", name: "Primary" }, { id: "SSECONDARY", name: "Secondary" }],
+    shifts: [
+      { id: "SPRIMARY", shifts: [shift("you", -4, 0), shift("you", 0, 8), shift("bob", 8, 32), shift("you", 72, 80)] },
+      { id: "SSECONDARY", shifts: [shift("alice", -16, 12), shift("you", 12, 36)] }
+    ]
+  }
 }
 
 // Demo data in the real API shape, for the two DEMO_INSTANCES. Every 2 minutes "Payment latency" starts
