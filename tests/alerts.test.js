@@ -7,7 +7,7 @@ const path = require("path")
 const src = fs.readFileSync(path.join(__dirname, "..", "Alerts.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const A = new Function(src + "; return { severityOf, displayLabels, parseInstances, apiBase, normalize, summarize, newAlerts, fingerprints, " +
   "panelItems, step, parseMatcher, matcherText, matchesAll, alertsUrl, firstRow, duration, silenceBody, demoAlerts, DEMO_INSTANCES, " +
-  "remaining, silencesUrl, expireUrl, normalizeSilences, demoSilences }")()
+  "remaining, silencesUrl, expireUrl, normalizeSilences, demoSilences, rulesUrl, normalizePending, demoPending }")()
 
 const NOW = Date.parse("2026-10-10T12:00:00Z")
 
@@ -153,5 +153,48 @@ const disk = off.find(r => r.fingerprint === "demo-disk")
 const created = Object.assign(A.silenceBody(disk, 60, NOW, "dan"), { instance: "prod", id: "x", status: { state: "active" } })
 assert.strictEqual(A.summarize(A.normalize(A.demoAlerts(120000, demoSil.concat([created]), "prod"), "prod")).silenced, 2)
 assert.strictEqual(A.summarize(A.normalize(A.demoAlerts(120000, [Object.assign({}, created, { instance: "staging" })], "prod"), "prod")).silenced, 0)
+
+// pending: Grafana rules API only, Pending alert instances, local matchers, longest pending first
+assert.strictEqual(A.rulesUrl(inst[0]), "https://grafana.work/api/prometheus/grafana/api/v1/rules?state=pending&state=firing")
+assert.strictEqual(A.rulesUrl(inst[1]), "")
+const rulesResp = { status: "success", data: { groups: [{ name: "g", rules: [
+  { uid: "r1", name: "Lag", annotations: { summary: "rule summary" }, alerts: [
+    { labels: { alertname: "Lag", severity: "critical", team: "backend" }, state: "Pending", activeAt: "2026-10-10T11:55:00.123456789Z" },
+    { labels: { alertname: "Lag", team: "backend", db: "b" }, state: "Alerting", activeAt: "2026-10-10T11:00:00Z" },
+    { labels: { alertname: "Lag", team: "ops" }, state: "pending", activeAt: "2026-10-10T11:00:00Z" },
+  ] },
+  { name: "Cpu", alerts: [{ labels: { team: "backend", node: "n1" }, annotations: { summary: "93%" }, state: "Pending", activeAt: "2026-10-10T11:50:00Z" }] },
+  { name: "Quiet", alerts: [{ labels: { team: "backend" }, state: "Normal", activeAt: "0001-01-01T00:00:00Z" }] },
+] }] } }
+const backend = Object.assign({}, inst[0], { name: "prod", matchers: [A.parseMatcher("team=backend")] })
+const pend = A.normalizePending(rulesResp, backend)
+assert.deepStrictEqual(pend.map(p => p.name), ["Cpu", "Lag"])
+assert.ok(pend.every(p => p.isPending && !p.silenced && p.instance === "prod"))
+assert.strictEqual(pend[1].startsAt, "2026-10-10T11:55:00.123Z")
+assert.strictEqual(A.duration(pend[1].startsAt, NOW), "4m")
+assert.strictEqual(pend[1].summary, "rule summary")
+assert.strictEqual(pend[1].severity, "critical")
+assert.strictEqual(pend[1].url, "https://grafana.work/alerting/grafana/r1/view")
+assert.strictEqual(pend[0].url, "")
+assert.strictEqual(pend[0].labelText, "node=n1  team=backend")
+assert.strictEqual(A.normalizePending(rulesResp, inst[0]).length, 3)
+assert.deepStrictEqual(A.normalizePending(null, inst[0]), [])
+assert.deepStrictEqual(A.normalizePending({ message: "forbidden" }, inst[0]), [])
+// pending go between alerts and silences, never into the summary; a failed rules request only marks the Pending header
+const withPend = A.panelItems(two, { prod: rows.slice(0, 1) }, {}, { prod: sil.slice(0, 1) }, {}, { prod: pend }, { staging: "403" })
+assert.deepStrictEqual(withPend.map(i => i.key), ["#prod", "prod/c-old", "#staging", "#pending", pend[0].key, pend[1].key,
+  "#silences", "silence:prod/soon"])
+assert.strictEqual(withPend[3].count, 2)
+assert.strictEqual(withPend[3].error, "staging: 403")
+assert.strictEqual(withPend[0].count, 1)
+assert.strictEqual(A.step(withPend, 1, 1), 4)
+assert.strictEqual(A.panelItems(two, {}, {}, {}, {}, {}, {}).length, 2)
+// demo: only prod has pending; Payment latency is pending exactly when it is not firing
+assert.strictEqual(A.demoPending(NOW, "staging"), null)
+const pendOn = A.normalizePending(A.demoPending(0, "prod"), A.DEMO_INSTANCES[0]).map(p => p.name)
+const pendOff = A.normalizePending(A.demoPending(120000, "prod"), A.DEMO_INSTANCES[0]).map(p => p.name)
+assert.deepStrictEqual(pendOn, ["CPU saturation", "Replication lag"])
+assert.ok(pendOff.includes("Payment latency p99") && pendOff.length === 3)
+assert.ok(on.some(r => r.name === "Payment latency p99") && !off.some(r => r.name === "Payment latency p99"))
 
 console.log("ok")

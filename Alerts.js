@@ -160,10 +160,66 @@ function fingerprints(rows) {
   return set
 }
 
+// Pending alerts come from Grafana's Prometheus-compatible rules API; Alertmanager knows nothing about them.
+// `state=` keeps rules with pending (or firing, which may also have pending instances) alerts; older Grafana ignores it.
+function rulesUrl(instance) {
+  return instance.type === "grafana" ? instance.url + "/api/prometheus/grafana/api/v1/rules?state=pending&state=firing" : ""
+}
+
+// Pending alert instances of one Grafana as panel rows, the ones pending longest first. The instance's matchers
+// are applied here, since the rules API has no filter= like the alerts API. Rows look like normalize() rows,
+// with `isPending` and `startsAt` = activeAt.
+function normalizePending(raw, instance) {
+  var groups = (raw && raw.data && raw.data.groups) || []
+  var rows = []
+  for (var g = 0; g < groups.length; g++) {
+    var rules = (groups[g] && groups[g].rules) || []
+    for (var r = 0; r < rules.length; r++) {
+      var rule = rules[r] || {}
+      var alerts = rule.alerts || []
+      for (var i = 0; i < alerts.length; i++) {
+        var a = alerts[i] || {}
+        var labels = a.labels || {}
+        if (String(a.state || "").toLowerCase() !== "pending" || !matchesAll(labels, instance.matchers)) continue
+        var annotations = a.annotations || rule.annotations || {}
+        rows.push({
+          isPending: true,
+          instance: instance.name,
+          key: "pending:" + instance.name + "/" + JSON.stringify(labels),
+          name: String(labels.alertname || rule.name || "Unnamed alert"),
+          severity: severityOf(labels),
+          summary: String(annotations.summary || annotations.description || ""),
+          labels: labels,
+          labelText: displayLabels(labels).join("  "),
+          // Go timestamps carry nanoseconds, which QML's Date.parse may reject.
+          startsAt: String(a.activeAt || "").replace(/(\.\d{3})\d+/, "$1"),
+          url: rule.uid ? instance.url + "/alerting/grafana/" + rule.uid + "/view" : "",
+          silenced: false
+        })
+      }
+    }
+  }
+  rows.sort(function(x, y) { return x.startsAt < y.startsAt ? -1 : x.startsAt > y.startsAt ? 1 : 0 })
+  return rows
+}
+
+// Rows of every instance for one trailing panel section plus the instances whose request failed.
+function section(instances, byInstance, errorsByInstance) {
+  var list = [], failed = []
+  for (var i = 0; i < instances.length; i++) {
+    var n = instances[i].name
+    list = list.concat((byInstance || {})[n] || [])
+    var e = (errorsByInstance || {})[n]
+    if (e) failed.push(instances.length > 1 ? n + ": " + e : e)
+  }
+  return { list: list, error: failed.join("; ") }
+}
+
 // The panel list: with several instances each group gets a header row (alert count or the error),
 // so an unreachable instance shows up in place instead of hiding the others.
-// Active silences go last, under their own header, which also carries any instance whose silences failed to load.
-function panelItems(instances, rowsByInstance, errors, silencesByInstance, silenceErrors) {
+// Pending alerts and then active silences follow, each under its own header, which also carries any instance
+// whose request for them failed.
+function panelItems(instances, rowsByInstance, errors, silencesByInstance, silenceErrors, pendingByInstance, pendingErrors) {
   var items = []
   for (var i = 0; i < instances.length; i++) {
     var name = instances[i].name
@@ -173,16 +229,14 @@ function panelItems(instances, rowsByInstance, errors, silencesByInstance, silen
         filter: (instances[i].matchers || []).map(matcherText).join(", ") })
     items = items.concat(rows)
   }
-  var silences = [], failed = []
-  for (var j = 0; j < instances.length; j++) {
-    var n = instances[j].name
-    silences = silences.concat((silencesByInstance || {})[n] || [])
-    var e = (silenceErrors || {})[n]
-    if (e) failed.push(instances.length > 1 ? n + ": " + e : e)
-  }
-  if (silences.length > 0 || failed.length > 0)
-    items.push({ header: true, silences: true, key: "#silences", count: silences.length, error: failed.join("; ") })
-  return items.concat(silences)
+  var pending = section(instances, pendingByInstance, pendingErrors)
+  if (pending.list.length > 0 || pending.error !== "")
+    items.push({ header: true, pending: true, key: "#pending", count: pending.list.length, error: pending.error })
+  items = items.concat(pending.list)
+  var silences = section(instances, silencesByInstance, silenceErrors)
+  if (silences.list.length > 0 || silences.error !== "")
+    items.push({ header: true, silences: true, key: "#silences", count: silences.list.length, error: silences.error })
+  return items.concat(silences.list)
 }
 
 // Next selectable index from `from` moving by `dy`, skipping headers; stays put at the ends.
@@ -284,6 +338,34 @@ function demoSilences(nowMs) {
     silence("staging", "demo-silence-reports", [{ name: "queue", value: "reports|archive", isRegex: true, isEqual: true }],
       "bob", "Queues are being migrated", 190)
   ]
+}
+
+// Demo rules API response for a demo instance (only prod is a Grafana). "Payment latency p99" is pending in the
+// phase where demoAlerts() does not fire it, so it moves from Pending to firing every 2 minutes.
+function demoPending(nowMs, instance) {
+  if (instance !== "prod") return null
+  var phase = Math.floor(nowMs / 120000) % 2 === 0
+  function ago(min) { return new Date(nowMs - min * 60000).toISOString() }
+  function rule(uid, name, alerts) { return { uid: uid, name: name, state: "pending", alerts: alerts } }
+  function alert(labels, summary, state, activeMinAgo) {
+    return { labels: labels, annotations: { summary: summary }, state: state, activeAt: ago(activeMinAgo) }
+  }
+  var rules = [
+    rule("demo-replication", "Replication lag", [
+      alert({ alertname: "Replication lag", severity: "warning", instance: "db-02:9187" }, "Replica 38s behind (threshold 30s for 10m)", "Pending", 4)
+    ]),
+    rule("demo-cpu", "CPU saturation", [
+      alert({ alertname: "CPU saturation", severity: "warning", node: "k8s-worker-3" }, "CPU 93% (threshold 90% for 15m)", "Pending", 9),
+      alert({ alertname: "CPU saturation", severity: "warning", node: "k8s-worker-1" }, "CPU 41%", "Normal", 0)
+    ])
+  ]
+  if (!phase) {
+    rules.push(rule("demo-latency", "Payment latency p99", [
+      alert({ alertname: "Payment latency p99", severity: "critical", service: "payments", env: "prod" },
+        "p99 1.4s (threshold 1s for 2m)", "Pending", (nowMs % 120000) / 60000)
+    ]))
+  }
+  return { status: "success", data: { groups: [{ name: "demo", file: "Demo", rules: rules }] } }
 }
 
 // Demo data in the real API shape, for the two DEMO_INSTANCES. Every 2 minutes "Payment latency" starts

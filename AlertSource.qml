@@ -49,6 +49,11 @@ Item {
 
   property var demoSilences: Alerts.demoSilences(Date.now())
 
+  // Pending alerts likewise, only from Grafana instances: they never count in the badge and never notify.
+  property var pendingByInstance: ({})
+  property var pendingErrors: ({})
+  readonly property var grafanaInstances: configured.filter(function(i) { return i.type === "grafana" })
+
   // The token is read inside sh and handed to curl on stdin, so it never shows up in argv / ps.
   // An empty token file ($1) sends no Authorization header: a plain Alertmanager often has none.
   // The remaining arguments go to curl.
@@ -82,6 +87,8 @@ Item {
       known = {}
       silencesByInstance = {}
       silenceErrors = {}
+      pendingByInstance = {}
+      pendingErrors = {}
     }
     poll()
   }
@@ -94,6 +101,7 @@ Item {
         else apply(instances[i].name, raw)
         var name = instances[i].name
         set("silencesByInstance", name, Alerts.normalizeSilences(demoSilences.filter(function(s) { return s.instance === name }), name))
+        if (instances[i].type === "grafana") set("pendingByInstance", name, Alerts.normalizePending(Alerts.demoPending(Date.now(), name), instances[i]))
       }
       return
     }
@@ -104,6 +112,10 @@ Item {
     for (var k = 0; k < silenceFetchers.count; k++) {
       var sf = silenceFetchers.objectAt(k)
       if (sf && !sf.running) sf.running = true
+    }
+    for (var p = 0; p < pendingFetchers.count; p++) {
+      var pf = pendingFetchers.objectAt(p)
+      if (pf && !pf.running) pf.running = true
     }
   }
 
@@ -256,6 +268,27 @@ Item {
         }
         root.set("silencesByInstance", modelData.name, Alerts.normalizeSilences(list, modelData.name))
         root.set("silenceErrors", modelData.name, err)
+      }
+    }
+  }
+
+  Instantiator {
+    id: pendingFetchers
+    model: root.grafanaInstances
+    delegate: Process {
+      required property var modelData
+      command: ["sh", "-c", root.curlScript, "sh", root.expandHome(modelData.tokenFile), Alerts.rulesUrl(modelData)]
+      stdout: StdioCollector { id: pendingOut; waitForEnd: true }
+      stderr: StdioCollector { id: pendingErr; waitForEnd: true }
+      onExited: function(exitCode) {
+        var out = String(pendingOut.text || "")
+        var raw = null, err = ""
+        if (exitCode !== 0) err = root.errorText(out, String(pendingErr.text || ""))
+        else {
+          try { raw = JSON.parse(out) } catch (e) { err = "unexpected response: " + out.slice(0, 80) }
+        }
+        root.set("pendingByInstance", modelData.name, Alerts.normalizePending(raw, modelData))
+        root.set("pendingErrors", modelData.name, err)
       }
     }
   }

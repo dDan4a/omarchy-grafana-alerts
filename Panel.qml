@@ -19,9 +19,10 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   readonly property var rows: source ? source.rows : []
-  // Rows grouped by instance, with a header per instance when there are several, then active silences.
+  // Rows grouped by instance, with a header per instance when there are several, then pending alerts and active silences.
   readonly property var items: source
-    ? Alerts.panelItems(source.instances, source.rowsByInstance, source.errors, source.silencesByInstance, source.silenceErrors) : []
+    ? Alerts.panelItems(source.instances, source.rowsByInstance, source.errors, source.silencesByInstance, source.silenceErrors,
+      source.pendingByInstance, source.pendingErrors) : []
   readonly property var current: selected >= 0 && selected < items.length && !items[selected].header ? items[selected] : null
   readonly property var summary: source ? source.summary : Alerts.summarize([])
   property int selected: 0
@@ -63,6 +64,7 @@ Panel {
   onItemsChanged: if (!current) selected = Alerts.firstRow(items)
 
   function headerText(item) {
+    if (item.pending) return "Pending · " + item.count + (item.error !== "" ? " · could not load: " + item.error : "")
     if (item.silences) return "Silences · " + item.count + (item.error !== "" ? " · could not load: " + item.error : "")
     var name = item.filter !== "" ? item.instance + " {" + item.filter + "}" : item.instance
     if (item.error !== "") return name + " · unreachable: " + item.error
@@ -93,7 +95,7 @@ Panel {
       onTextKey: function(text) {
         var key = text.toLowerCase()
         if (key === "r") root.source.refresh()
-        else if (key === "s" && root.current && !root.current.isSilence && !root.current.silenced)
+        else if (key === "s" && root.current && !root.current.isSilence && !root.current.isPending && !root.current.silenced)
           root.source.silence(root.current, 60)
         else if (key === "u" && root.current && root.current.isSilence)
           root.source.expire(root.current)
@@ -341,7 +343,7 @@ Panel {
                   rightPadding: Style.space(4)
                 }
                 PanelActionButton {
-                  visible: !rowItem.modelData.silenced
+                  visible: !rowItem.modelData.silenced && !rowItem.modelData.isPending
                   iconText: "󰂛" // nf-md-bell_off
                   tooltipText: "Silence for 1 hour (s)"
                   foreground: root.foreground
