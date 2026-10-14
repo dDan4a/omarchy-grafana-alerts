@@ -7,6 +7,7 @@ Firing alerts from Grafana and Prometheus Alertmanager in the Omarchy bar.
 - **Several instances**: prod and staging Grafana, a plain Alertmanager. One that is down is marked in the panel; the others keep working.
 - A desktop notification fires for every new alert.
 - Silence an alert for an hour, or open its source, with one click or one key. Both go to the instance the alert came from.
+- Active silences are listed at the bottom of the panel: what they match, who set them, why, and how long they have left. Expire one early with one click or `u`.
 - **Demo mode** works without any server and runs until you configure one.
 
 ## Install
@@ -18,7 +19,8 @@ omarchy plugin add https://github.com/dDan4a/omarchy-grafana-alerts.git --enable
 The plugin starts in demo mode with two fake instances. Set it up to connect to your Grafana:
 
 1. Create a **service account** in Grafana (Administration → Service accounts) with the Viewer role.
-   To silence alerts from the bar, the account also needs `alert.silences:create`.
+   To silence alerts from the bar, the account also needs `alert.silences:create`; to expire silences, `alert.silences:write`.
+   Listing silences needs only `alert.silences:read`, which Viewer has.
 2. Put its token in a file that only you can read:
    ```bash
    mkdir -p ~/.config/grafana-alerts
@@ -71,6 +73,7 @@ With the panel open:
 | `↑` / `↓` | Select an alert |
 | `Enter` | Open the selected alert's source (its `generatorURL`) |
 | `s` | Silence the selected alert for 1 hour |
+| `u` | Expire the selected silence |
 | `r` | Refresh now |
 
 You can also drive it from the command line:
@@ -87,6 +90,8 @@ for Grafana, `/api/v2` for Alertmanager. Every instance is polled in parallel wi
 `GET <prefix>/alerts?active=true&inhibited=false`, plus one URL-encoded `filter=` per matcher; a slow or dead one does not hold up the others.
 Severity comes from the `severity` label: `critical`/`high`, `warning`, and everything else counts as info.
 A silence is created with `POST <prefix>/silences` on the alert's own instance and matches all labels of that one alert.
+Silences are loaded with `GET <prefix>/silences` (only `active` ones are shown) and expired with `DELETE <prefix>/silence/{id}`.
+A failed silences request is shown in the Silences header and leaves the alerts alone.
 Alerts are told apart by instance and fingerprint, so the same alert in prod and staging notifies twice.
 
 Polling, notifications and silences live in a single `service` (`AlertSource.qml`, `keepLoaded`). The bar widget on every

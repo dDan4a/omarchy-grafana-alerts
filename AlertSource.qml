@@ -43,7 +43,11 @@ Item {
   property double updatedAt: 0
   property double now: Date.now()
 
-  property var demoSilences: ({})
+  // Silences are loaded next to the alerts but kept apart: a failed request only marks the silences section.
+  property var silencesByInstance: ({})
+  property var silenceErrors: ({})
+
+  property var demoSilences: Alerts.demoSilences(Date.now())
 
   // The token is read inside sh and handed to curl on stdin, so it never shows up in argv / ps.
   // An empty token file ($1) sends no Authorization header: a plain Alertmanager often has none.
@@ -76,6 +80,8 @@ Item {
       rowsByInstance = {}
       errors = {}
       known = {}
+      silencesByInstance = {}
+      silenceErrors = {}
     }
     poll()
   }
@@ -86,12 +92,18 @@ Item {
         var raw = Alerts.demoAlerts(Date.now(), demoSilences, instances[i].name)
         if (raw === null) fail(instances[i].name, "demo: connection refused", "")
         else apply(instances[i].name, raw)
+        var name = instances[i].name
+        set("silencesByInstance", name, Alerts.normalizeSilences(demoSilences.filter(function(s) { return s.instance === name }), name))
       }
       return
     }
     for (var j = 0; j < fetchers.count; j++) {
       var f = fetchers.objectAt(j)
       if (f && !f.running) f.running = true
+    }
+    for (var k = 0; k < silenceFetchers.count; k++) {
+      var sf = silenceFetchers.objectAt(k)
+      if (sf && !sf.running) sf.running = true
     }
   }
 
@@ -139,9 +151,11 @@ Item {
 
   function silence(row, minutes) {
     if (demo) {
-      var s = Object.assign({}, demoSilences)
-      s[row.key] = true
-      demoSilences = s
+      var body = Alerts.silenceBody(row, minutes, Date.now(), Quickshell.env("USER"))
+      body.instance = row.instance
+      body.id = "demo-" + Date.now()
+      body.status = { state: "active" }
+      demoSilences = demoSilences.concat([body])
       poll()
       return
     }
@@ -153,6 +167,21 @@ Item {
       "--data-binary", JSON.stringify(Alerts.silenceBody(row, minutes, Date.now(), Quickshell.env("USER"))),
       Alerts.apiBase(inst) + "/silences"]
     silenceProcess.running = true
+  }
+
+  // Ends a silence early (DELETE <prefix>/silence/{id}) on its own instance, then reloads alerts and silences.
+  function expire(silence) {
+    if (demo) {
+      demoSilences = demoSilences.filter(function(s) { return !(s.instance === silence.instance && s.id === silence.id) })
+      poll()
+      return
+    }
+    var inst = instanceNamed(silence.instance)
+    if (!inst || expireProcess.running) return
+    expireProcess.instance = inst.name
+    expireProcess.command = ["sh", "-c", curlScript, "sh", expandHome(inst.tokenFile),
+      "-X", "DELETE", Alerts.expireUrl(inst, silence.id)]
+    expireProcess.running = true
   }
 
   onGrafanaUrlChanged: refresh()
@@ -207,6 +236,38 @@ Item {
           root.fail(modelData.name, "unexpected response: " + out.slice(0, 80), "")
         }
       }
+    }
+  }
+
+  Instantiator {
+    id: silenceFetchers
+    model: root.configured
+    delegate: Process {
+      required property var modelData
+      command: ["sh", "-c", root.curlScript, "sh", root.expandHome(modelData.tokenFile), Alerts.silencesUrl(modelData)]
+      stdout: StdioCollector { id: silencesOut; waitForEnd: true }
+      stderr: StdioCollector { id: silencesErr; waitForEnd: true }
+      onExited: function(exitCode) {
+        var out = String(silencesOut.text || "")
+        var list = null, err = ""
+        if (exitCode !== 0) err = root.errorText(out, String(silencesErr.text || ""))
+        else {
+          try { list = JSON.parse(out) } catch (e) { err = "unexpected response: " + out.slice(0, 80) }
+        }
+        root.set("silencesByInstance", modelData.name, Alerts.normalizeSilences(list, modelData.name))
+        root.set("silenceErrors", modelData.name, err)
+      }
+    }
+  }
+
+  Process {
+    id: expireProcess
+    property string instance: ""
+    stdout: StdioCollector { id: expireOut; waitForEnd: true }
+    stderr: StdioCollector { id: expireErr; waitForEnd: true }
+    onExited: function(exitCode) {
+      if (exitCode !== 0) root.set("silenceErrors", instance, "expire: " + root.errorText(String(expireOut.text || ""), String(expireErr.text || "")))
+      else root.poll()
     }
   }
 

@@ -162,7 +162,8 @@ function fingerprints(rows) {
 
 // The panel list: with several instances each group gets a header row (alert count or the error),
 // so an unreachable instance shows up in place instead of hiding the others.
-function panelItems(instances, rowsByInstance, errors) {
+// Active silences go last, under their own header, which also carries any instance whose silences failed to load.
+function panelItems(instances, rowsByInstance, errors, silencesByInstance, silenceErrors) {
   var items = []
   for (var i = 0; i < instances.length; i++) {
     var name = instances[i].name
@@ -172,7 +173,16 @@ function panelItems(instances, rowsByInstance, errors) {
         filter: (instances[i].matchers || []).map(matcherText).join(", ") })
     items = items.concat(rows)
   }
-  return items
+  var silences = [], failed = []
+  for (var j = 0; j < instances.length; j++) {
+    var n = instances[j].name
+    silences = silences.concat((silencesByInstance || {})[n] || [])
+    var e = (silenceErrors || {})[n]
+    if (e) failed.push(instances.length > 1 ? n + ": " + e : e)
+  }
+  if (silences.length > 0 || failed.length > 0)
+    items.push({ header: true, silences: true, key: "#silences", count: silences.length, error: failed.join("; ") })
+  return items.concat(silences)
 }
 
 // Next selectable index from `from` moving by `dy`, skipping headers; stays put at the ends.
@@ -201,6 +211,44 @@ function duration(startsAt, nowMs) {
   return Math.floor(h / 24) + "d " + (h % 24) + "h"
 }
 
+// The other way round: how long until `endsAt`.
+function remaining(endsAt, nowMs) {
+  var end = Date.parse(endsAt)
+  return isFinite(end) ? duration(new Date(nowMs).toISOString(), end) : ""
+}
+
+function silencesUrl(instance) { return apiBase(instance) + "/silences" }
+function expireUrl(instance, id) { return apiBase(instance) + "/silence/" + encodeURIComponent(id) }
+
+// API matcher { name, value, isRegex, isEqual } in the same text form as the instance filters.
+function silenceMatcherText(m) {
+  var eq = m.isEqual !== false
+  return matcherText({ name: String(m.name), op: m.isRegex ? (eq ? "=~" : "!~") : (eq ? "=" : "!="), value: String(m.value) })
+}
+
+// Active silences of one instance for the panel, the ones that end first on top.
+// The API also returns pending and expired silences; those are dropped.
+function normalizeSilences(raw, instance) {
+  if (!Array.isArray(raw)) return []
+  var out = []
+  for (var i = 0; i < raw.length; i++) {
+    var s = raw[i] || {}
+    if (!s.status || s.status.state !== "active") continue
+    out.push({
+      isSilence: true,
+      instance: String(instance || ""),
+      key: "silence:" + instance + "/" + s.id,
+      id: String(s.id),
+      matcherText: (s.matchers || []).map(silenceMatcherText).join(", "),
+      createdBy: String(s.createdBy || ""),
+      comment: String(s.comment || ""),
+      endsAt: String(s.endsAt || "")
+    })
+  }
+  out.sort(function(x, y) { return x.endsAt < y.endsAt ? -1 : x.endsAt > y.endsAt ? 1 : 0 })
+  return out
+}
+
 // Silence body for POST <apiBase>/silences matching this exact alert.
 function silenceBody(row, minutes, nowMs, author) {
   var matchers = []
@@ -222,15 +270,34 @@ var DEMO_INSTANCES = [
     matchers: [parseMatcher("queue=~emails|billing")] }
 ]
 
+// Demo silences in the API shape plus an `instance` field: one per instance to start with; silencing and
+// expiring in demo mode add to and remove from this list. The prod one covers the TLS certificate alert.
+function demoSilences(nowMs) {
+  function silence(instance, id, matchers, createdBy, comment, endsInMin) {
+    return { instance: instance, id: id, matchers: matchers, createdBy: createdBy, comment: comment,
+      startsAt: new Date(nowMs - 3600000).toISOString(), endsAt: new Date(nowMs + endsInMin * 60000).toISOString(),
+      status: { state: "active" } }
+  }
+  return [
+    silence("prod", "demo-silence-cert", [{ name: "alertname", value: "TLS certificate expires soon", isRegex: false, isEqual: true }],
+      "alice", "Renewal is in OPS-112", 60 * 50),
+    silence("staging", "demo-silence-reports", [{ name: "queue", value: "reports|archive", isRegex: true, isEqual: true }],
+      "bob", "Queues are being migrated", 190)
+  ]
+}
+
 // Demo data in the real API shape, for the two DEMO_INSTANCES. Every 2 minutes "Payment latency" starts
 // firing in prod while staging goes unreachable (null), so notifications, the badge and the
-// unreachable mark can all be seen without a real instance. `silencedKeys` holds row keys.
+// unreachable mark can all be seen without a real instance. An alert matched by one of the instance's
+// `silences` (demoSilences entries) is suppressed.
 // The instance's matchers are applied here, as the server would: staging's filter drops "reports".
-function demoAlerts(nowMs, silencedKeys, instance) {
+function demoAlerts(nowMs, silences, instance) {
   var phase = Math.floor(nowMs / 120000) % 2 === 0
   function ago(min) { return new Date(nowMs - min * 60000).toISOString() }
   function alert(fp, labels, annotations, startedMinAgo) {
-    var silenced = !!(silencedKeys && silencedKeys[instance + "/" + fp])
+    var silenced = (silences || []).some(function(s) {
+      return s.instance === instance && matchesAll(labels, s.matchers.map(function(m) { return parseMatcher(silenceMatcherText(m)) }))
+    })
     return {
       fingerprint: fp,
       labels: labels,

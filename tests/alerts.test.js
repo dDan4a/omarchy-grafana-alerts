@@ -6,7 +6,8 @@ const path = require("path")
 // Alerts.js is a QML `.pragma library` file: drop the pragma and expose its functions.
 const src = fs.readFileSync(path.join(__dirname, "..", "Alerts.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const A = new Function(src + "; return { severityOf, displayLabels, parseInstances, apiBase, normalize, summarize, newAlerts, fingerprints, " +
-  "panelItems, step, parseMatcher, matcherText, matchesAll, alertsUrl, firstRow, duration, silenceBody, demoAlerts, DEMO_INSTANCES }")()
+  "panelItems, step, parseMatcher, matcherText, matchesAll, alertsUrl, firstRow, duration, silenceBody, demoAlerts, DEMO_INSTANCES, " +
+  "remaining, silencesUrl, expireUrl, normalizeSilences, demoSilences }")()
 
 const NOW = Date.parse("2026-10-10T12:00:00Z")
 
@@ -110,15 +111,47 @@ assert.strictEqual(body.matchers.length, 3)
 assert.ok(body.matchers.every(m => m.isEqual && !m.isRegex))
 assert.strictEqual(Date.parse(body.endsAt) - Date.parse(body.startsAt), 3600000)
 
+// silences: only active ones, soonest end first, matchers in filter syntax; URLs per instance type
+assert.strictEqual(A.silencesUrl(inst[0]), "https://grafana.work/api/alertmanager/grafana/api/v2/silences")
+assert.strictEqual(A.expireUrl(inst[1], "a/b"), "http://am:9093/api/v2/silence/a%2Fb")
+const sil = A.normalizeSilences([
+  { id: "late", status: { state: "active" }, endsAt: "2026-10-10T15:00:00Z", createdBy: "bob", comment: "c",
+    matchers: [{ name: "env", value: "dev", isRegex: false, isEqual: false }, { name: "q", value: "a|b", isRegex: true }] },
+  { id: "old", status: { state: "expired" }, endsAt: "2026-10-10T11:00:00Z", matchers: [] },
+  { id: "soon", status: { state: "active" }, endsAt: "2026-10-10T12:30:00Z", matchers: [{ name: "alertname", value: "X", isRegex: false, isEqual: true }] },
+  { id: "next", status: { state: "pending" }, endsAt: "2026-10-10T13:00:00Z", matchers: [] },
+], "prod")
+assert.deepStrictEqual(sil.map(s => s.id), ["soon", "late"])
+assert.strictEqual(sil[1].matcherText, 'env!="dev", q=~"a|b"')
+assert.strictEqual(sil[0].matcherText, 'alertname="X"')
+assert.strictEqual(sil[1].instance, "prod")
+assert.ok(sil[0].isSilence && !sil[0].header)
+assert.deepStrictEqual(A.normalizeSilences({ message: "forbidden" }, "prod"), [])
+assert.strictEqual(A.remaining("2026-10-10T15:00:00Z", NOW), "3h 0m")
+assert.strictEqual(A.remaining("garbage", NOW), "")
+// silences come after all alerts under one header; a failed instance is named there, alerts are untouched
+const withSil = A.panelItems(two, { prod: rows.slice(0, 1) }, {}, { prod: sil }, { staging: "403" })
+assert.deepStrictEqual(withSil.map(i => i.key), ["#prod", "prod/c-old", "#staging", "#silences", "silence:prod/soon", "silence:prod/late"])
+assert.strictEqual(withSil[3].count, 2)
+assert.strictEqual(withSil[3].error, "staging: 403")
+assert.strictEqual(A.step(withSil, 1, 1), 4)
+assert.strictEqual(A.panelItems(two, {}, {}, {}, {}).length, 2)
+
 // demo data: two instances; prod flaps, staging goes unreachable, local silences by key
 assert.deepStrictEqual(A.DEMO_INSTANCES.map(i => i.name), ["prod", "staging"])
-const on = A.normalize(A.demoAlerts(0, {}, "prod"), "prod")
-const off = A.normalize(A.demoAlerts(120000, {}, "prod"), "prod")
+const on = A.normalize(A.demoAlerts(0, [], "prod"), "prod")
+const off = A.normalize(A.demoAlerts(120000, [], "prod"), "prod")
 assert.strictEqual(on.length - off.length, 1)
-assert.strictEqual(A.demoAlerts(0, {}, "staging"), null)
+assert.strictEqual(A.demoAlerts(0, [], "staging"), null)
 // staging's demo filter keeps the emails queue and drops reports
-assert.deepStrictEqual(A.normalize(A.demoAlerts(120000, {}, "staging"), "staging").map(r => r.labels.queue), ["emails"])
-const silenced = A.summarize(A.normalize(A.demoAlerts(120000, { "prod/demo-disk": true }, "prod"), "prod"))
-assert.strictEqual(silenced.silenced, 1)
+assert.deepStrictEqual(A.normalize(A.demoAlerts(120000, [], "staging"), "staging").map(r => r.labels.queue), ["emails"])
+// demo silences suppress what they match, on their own instance only; one created with silenceBody works too
+const demoSil = A.demoSilences(NOW)
+assert.strictEqual(A.summarize(A.normalize(A.demoAlerts(120000, demoSil, "prod"), "prod")).silenced, 1)
+assert.strictEqual(A.normalizeSilences(demoSil.filter(s => s.instance === "staging"), "staging").length, 1)
+const disk = off.find(r => r.fingerprint === "demo-disk")
+const created = Object.assign(A.silenceBody(disk, 60, NOW, "dan"), { instance: "prod", id: "x", status: { state: "active" } })
+assert.strictEqual(A.summarize(A.normalize(A.demoAlerts(120000, demoSil.concat([created]), "prod"), "prod")).silenced, 2)
+assert.strictEqual(A.summarize(A.normalize(A.demoAlerts(120000, [Object.assign({}, created, { instance: "staging" })], "prod"), "prod")).silenced, 0)
 
 console.log("ok")

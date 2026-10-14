@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "author": "dDan4a",
   "license": "MIT",
-  "description": "Firing alerts from one or more Grafana and Prometheus Alertmanager instances in the Omarchy bar: severity badge, alert list grouped by instance, desktop notifications, one-key silence. Works in demo mode without a server.",
+  "description": "Firing alerts from one or more Grafana and Prometheus Alertmanager instances in the Omarchy bar: severity badge, alert list grouped by instance, desktop notifications, one-key silence, list and expire active silences. Works in demo mode without a server.",
   "kinds": [
     "service",
     "bar-widget"

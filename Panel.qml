@@ -19,8 +19,9 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
 
   readonly property var rows: source ? source.rows : []
-  // Rows grouped by instance, with a header per instance when there are several.
-  readonly property var items: source ? Alerts.panelItems(source.instances, source.rowsByInstance, source.errors) : []
+  // Rows grouped by instance, with a header per instance when there are several, then active silences.
+  readonly property var items: source
+    ? Alerts.panelItems(source.instances, source.rowsByInstance, source.errors, source.silencesByInstance, source.silenceErrors) : []
   readonly property var current: selected >= 0 && selected < items.length && !items[selected].header ? items[selected] : null
   readonly property var summary: source ? source.summary : Alerts.summarize([])
   property int selected: 0
@@ -62,6 +63,7 @@ Panel {
   onItemsChanged: if (!current) selected = Alerts.firstRow(items)
 
   function headerText(item) {
+    if (item.silences) return "Silences · " + item.count + (item.error !== "" ? " · could not load: " + item.error : "")
     var name = item.filter !== "" ? item.instance + " {" + item.filter + "}" : item.instance
     if (item.error !== "") return name + " · unreachable: " + item.error
     return name + " · " + (item.count > 0 ? item.count + " firing" : "all quiet")
@@ -85,14 +87,16 @@ Panel {
         root.selected = Alerts.step(root.items, root.selected, dy)
         list.positionViewAtIndex(root.selected, ListView.Contain)
       }
-      onActivateRequested: if (root.current) root.source.openAlert(root.current)
+      onActivateRequested: if (root.current && !root.current.isSilence) root.source.openAlert(root.current)
       onCloseRequested: root.close()
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
         var key = text.toLowerCase()
         if (key === "r") root.source.refresh()
-        else if (key === "s" && root.current && !root.current.silenced)
+        else if (key === "s" && root.current && !root.current.isSilence && !root.current.silenced)
           root.source.silence(root.current, 60)
+        else if (key === "u" && root.current && root.current.isSilence)
+          root.source.expire(root.current)
       }
 
       Column {
@@ -154,7 +158,7 @@ Panel {
             required property var modelData
             required property int index
             width: ListView.view.width
-            sourceComponent: modelData.header ? headerComponent : rowComponent
+            sourceComponent: modelData.header ? headerComponent : modelData.isSilence ? silenceComponent : rowComponent
           }
 
           Component {
@@ -171,6 +175,79 @@ Panel {
               leftPadding: Style.space(8)
               elide: Text.ElideRight
               textFormat: Text.PlainText
+            }
+          }
+
+          Component {
+            id: silenceComponent
+            Rectangle {
+              id: silenceItem
+              readonly property var modelData: parent ? parent.modelData : ({})
+              readonly property int index: parent ? parent.index : -1
+
+              width: parent ? parent.width : 0
+              height: silenceColumn.implicitHeight + Style.space(12)
+              radius: Style.space(6)
+              color: index === root.selected || silenceHover.hovered ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08) : "transparent"
+
+              HoverHandler { id: silenceHover }
+              TapHandler { onTapped: root.selected = silenceItem.index }
+
+              Column {
+                id: silenceColumn
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(24)
+                anchors.right: silenceActions.left
+                anchors.rightMargin: Style.space(6)
+                y: Style.space(6)
+                spacing: Style.space(2)
+
+                Text {
+                  width: parent.width
+                  text: silenceItem.modelData.matcherText
+                  color: root.foreground
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.body
+                  wrapMode: Text.Wrap
+                  maximumLineCount: 2
+                  elide: Text.ElideRight
+                  textFormat: Text.PlainText
+                }
+                Text {
+                  visible: text !== ""
+                  width: parent.width
+                  text: [root.source && root.source.instances.length > 1 ? silenceItem.modelData.instance : "",
+                    silenceItem.modelData.createdBy, silenceItem.modelData.comment].filter(function(t) { return t !== "" }).join(" · ")
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                  textFormat: Text.PlainText
+                }
+              }
+
+              Row {
+                id: silenceActions
+                anchors.right: parent.right
+                anchors.rightMargin: Style.space(4)
+                y: Style.space(4)
+                spacing: Style.space(2)
+
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: root.source ? "ends in " + Alerts.remaining(silenceItem.modelData.endsAt, root.source.now) : ""
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  rightPadding: Style.space(4)
+                }
+                PanelActionButton {
+                  iconText: "󰂚" // nf-md-bell
+                  tooltipText: "Expire silence (u)"
+                  foreground: root.foreground
+                  onClicked: root.source.expire(silenceItem.modelData)
+                }
+              }
             }
           }
 
@@ -284,7 +361,7 @@ Panel {
 
         Text {
           width: parent.width
-          text: "↑↓ select · Enter open · s silence 1h · r refresh"
+          text: "↑↓ select · Enter open · s silence 1h · u expire silence · r refresh"
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
