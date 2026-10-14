@@ -9,7 +9,7 @@ const src = fs.readFileSync(path.join(__dirname, "..", "Alerts.js"), "utf8").rep
 const A = new Function(src + "; return { severityOf, displayLabels, parseInstances, apiBase, normalize, summarize, newAlerts, fingerprints, " +
   "panelItems, step, parseMatcher, matcherText, matchesAll, alertsUrl, firstRow, duration, silenceBody, demoAlerts, DEMO_INSTANCES, " +
   "remaining, silencesUrl, expireUrl, normalizeSilences, demoSilences, rulesUrl, normalizePending, demoPending, DND_FOREVER, dndActive, dndToggle, dndText, parseDnd, toNotify, " +
-  "oncallRange, normalizeOncall, oncallView, demoOncall }")()
+  "oncallRange, normalizeOncall, oncallView, demoOncall, ruleUid, ruleUrl, sparkQuery, sparkSeries, sparkGeometry, sparkCaption, demoSpark }")()
 
 const NOW = Date.parse("2026-10-10T12:00:00Z")
 
@@ -286,5 +286,70 @@ assert.deepStrictEqual(A.oncallView([{ name: "am", oncall: null }], {}, {}, NOW)
 const dv = A.oncallView(A.DEMO_INSTANCES, { prod: A.normalizeOncall(A.demoOncall(NOW, "prod")) }, {}, NOW)
 assert.ok(dv.onCall && dv.next.length === 2)
 assert.strictEqual(A.demoOncall(NOW, "staging"), null)
+
+// sparkline: rule uid only on Grafana instances, from the label or the pending row
+const g = { name: "prod", type: "grafana", url: "https://g" }, am = { name: "am", type: "alertmanager", url: "http://am" }
+assert.strictEqual(A.ruleUid({ labels: { __alert_rule_uid__: "r1" } }, g), "r1")
+assert.strictEqual(A.ruleUid({ ruleUid: "r2", labels: {} }, g), "r2")
+assert.strictEqual(A.ruleUid({ labels: { __alert_rule_uid__: "r1" } }, am), "")
+assert.strictEqual(A.ruleUrl(g, "a/b"), "https://g/api/ruler/grafana/api/v1/rule/a%2Fb")
+assert.strictEqual(A.normalizePending(A.demoPending(NOW, "prod"), A.DEMO_INSTANCES[0])[0].ruleUid, "demo-cpu")
+
+// sparkline: threshold through reduce, instant query turned into a range one
+const expr = (refId, model) => ({ refId, datasourceUid: "__expr__", model: Object.assign({ refId }, model) })
+const promA = { refId: "A", datasourceUid: "prom", model: { refId: "A", expr: "up", instant: true, range: false } }
+const rule = (condition, data) => ({ grafana_alert: { uid: "u", condition, data } })
+const sq = A.sparkQuery(rule("C", [promA, expr("B", { type: "reduce", expression: "A", reducer: "last" }),
+  expr("C", { type: "threshold", expression: "B", conditions: [{ evaluator: { type: "gt", params: [0.5] } }] })]))
+assert.deepStrictEqual(sq.thresholds, [0.5])
+assert.strictEqual(sq.refId, "A")
+assert.deepStrictEqual(sq.request.queries[0], { refId: "A", expr: "up", instant: false, range: true, datasource: { uid: "prom" },
+  hide: false, intervalMs: 30000, maxDataPoints: 120 })
+assert.strictEqual(sq.request.from, "now-1h")
+// range evaluators give two lines, no_value none
+assert.deepStrictEqual(A.sparkQuery(rule("C", [promA, expr("C", { type: "threshold", expression: "A",
+  conditions: [{ evaluator: { type: "outside_range", params: [1, 5] } }] })])).thresholds, [1, 5])
+// classic condition with one condition
+const lokiA = { refId: "A", datasourceUid: "loki", model: { refId: "A", expr: "x", queryType: "instant" } }
+const cc = A.sparkQuery(rule("B", [lokiA, expr("B", { type: "classic_conditions",
+  conditions: [{ evaluator: { type: "lt", params: [3] }, query: { params: ["A"] }, reducer: { type: "avg" } }] })]))
+assert.deepStrictEqual(cc.thresholds, [3])
+assert.strictEqual(cc.request.queries[0].queryType, "range")
+assert.deepStrictEqual(A.sparkQuery(rule("B", [lokiA, expr("B", { type: "classic_conditions", conditions: [
+  { evaluator: { type: "gt", params: [1] }, query: { params: ["A"] } }, { evaluator: { type: "gt", params: [2] }, query: { params: ["A"] } }] })])).thresholds, [])
+// math in the chain: no threshold, still the first query; no datasource query at all: null
+const mq = A.sparkQuery(rule("C", [promA, expr("B", { type: "math", expression: "$A * 100" }),
+  expr("C", { type: "threshold", expression: "B", conditions: [{ evaluator: { type: "gt", params: [50] } }] })]))
+assert.deepStrictEqual([mq.refId, mq.thresholds], ["A", []])
+assert.strictEqual(A.sparkQuery(rule("C", [expr("C", { type: "math", expression: "1" })])), null)
+assert.strictEqual(A.sparkQuery({}), null)
+
+// ds/query response: the series of this alert by labels, else the first; nulls dropped
+const frame = (labels, times, vals) => ({ schema: { fields: [{ name: "Time", type: "time" }, { name: "Value", type: "number", labels }] },
+  data: { values: [times, vals] } })
+const resp = { results: { A: { status: 200, frames: [frame({ instance: "a" }, [1, 2, 3], [1, null, 3]), frame({ instance: "b" }, [1, 2], [7, 8])] } } }
+assert.deepStrictEqual(A.sparkSeries(resp, "A", { alertname: "x", instance: "b" }), [{ t: 1, v: 7 }, { t: 2, v: 8 }])
+assert.deepStrictEqual(A.sparkSeries(resp, "A", { instance: "zzz" }), [{ t: 1, v: 1 }, { t: 3, v: 3 }])
+const wide = { results: { A: { frames: [{ schema: { fields: [{ type: "time" }, { type: "number", labels: { host: "x" } }, { type: "number", labels: { host: "y" } }] },
+  data: { values: [[2, 1], [5, 6], [9, 8]] } }] } } }
+assert.deepStrictEqual(A.sparkSeries(wide, "A", { host: "y" }), [{ t: 1, v: 8 }, { t: 2, v: 9 }])
+assert.strictEqual(A.sparkSeries({ results: { A: { error: "denied", frames: [] } } }, "A", {}), null)
+assert.strictEqual(A.sparkSeries(resp, "B", {}), null)
+assert.strictEqual(A.sparkSeries({ results: { A: { frames: [frame({}, [1], [1])] } } }, "A", {}), null)
+
+// geometry: the threshold is inside the box even when the series never reaches it
+const geo = A.sparkGeometry([{ t: 0, v: 1 }, { t: 10, v: 2 }], [4], 100, 50)
+assert.deepStrictEqual(geo.line.map(p => p.x), [0, 100])
+assert.ok(geo.thresholds[0] > 0 && geo.thresholds[0] < geo.line[1].y && geo.line[0].y < 50)
+assert.ok(A.sparkGeometry([{ t: 0, v: 0 }, { t: 1, v: 0 }], [], 10, 10).line.every(p => p.y === 5))
+assert.strictEqual(A.sparkCaption({ points: [{ t: 0, v: 1 }, { t: 1, v: 1.23456 }], thresholds: [1] }), "last 1h · now 1.23 · threshold 1")
+
+// demo sparklines: prod alerts end past their threshold, staging has none
+const demoRows = A.normalize(A.demoAlerts(NOW, [], "prod"), "prod")
+assert.ok(demoRows.every(r => A.ruleUid(r, A.DEMO_INSTANCES[0]) !== ""))
+const lat = A.demoSpark(demoRows.find(r => r.name === "Payment latency p99"), NOW)
+assert.ok(lat.points[0].v < 1 && lat.points[lat.points.length - 1].v > 1 && lat.thresholds[0] === 1)
+assert.deepStrictEqual(A.demoSpark(demoRows[0], NOW), A.demoSpark(demoRows[0], NOW))
+assert.strictEqual(A.demoSpark({ name: "Queue backlog", instance: "staging", key: "k" }, NOW), null)
 
 console.log("ok")

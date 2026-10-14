@@ -9,6 +9,8 @@ Firing alerts from Grafana and Prometheus Alertmanager in the Omarchy bar.
 - **Do not disturb** mutes those notifications for an hour or until you turn it off. It is local: nothing is created in
   Grafana or Alertmanager, alerts keep updating and counting in the badge, and the bell in the bar is crossed out.
 - Silence an alert for an hour, or open its source, with one click or one key. Both go to the instance the alert came from.
+- **Sparkline**: the selected alert shows its rule's query over the last hour with the threshold as a dashed line.
+  Drawn in the panel itself, no Image Renderer needed. Grafana-managed rules only.
 - **Pending** alerts (the condition holds, but the rule's `for` has not run out yet) get their own section with how long they
   have been pending. They don't count in the badge and don't notify; once one fires it moves to the main list. Grafana only.
 - Active silences are listed at the bottom of the panel: what they match, who set them, why, and how long they have left. Expire one early with one click or `u`.
@@ -27,6 +29,7 @@ The plugin starts in demo mode with two fake instances. Set it up to connect to 
 1. Create a **service account** in Grafana (Administration → Service accounts) with the Viewer role.
    To silence alerts from the bar, the account also needs `alert.silences:create`; to expire silences, `alert.silences:write`.
    Listing silences needs only `alert.silences:read`, and pending alerts need `alert.rules:read` on the rule folders: Viewer has both.
+   The sparkline also needs `folders:read` on the rule's folder and query access to its data source, which Viewer has by default.
 2. Put its token in a file that only you can read:
    ```bash
    mkdir -p ~/.config/grafana-alerts
@@ -92,6 +95,19 @@ The panel gets an **On-call** section: every schedule with who is on call now, u
 your next two shifts in the next 14 days. If OnCall cannot be loaded, the section says so and alerts are not affected.
 Without `oncall` on any instance there is no section at all. In demo mode you are on call in prod's Primary schedule.
 
+### Sparkline
+
+The selected alert (or pending alert) of a Grafana instance gets a small chart under its labels: the rule's query over
+the last hour, the threshold as a dashed line, and the current value. It is loaded only for the selected alert and at
+most once per refresh interval.
+
+The threshold comes from the rule's `threshold` expression, or from a classic condition with a single condition, when
+only `reduce` steps lie between it and the query. With a `math` or `resample` step in between the values would not be
+comparable, so the chart is drawn without a threshold line. When the query returns several series, the one whose labels
+match the alert is drawn, else the first. Anything that fails (Grafana older than 11.3, no access to the data source, a
+rule without a data source query) just leaves the card without a chart. Alertmanager instances have none.
+In demo mode every prod alert has a sparkline that crosses its threshold.
+
 Alertmanager behind basic auth or mTLS is not supported yet.
 
 The token never goes into `shell.json`. The plugin reads it inside `sh` and passes it to `curl` on stdin,
@@ -140,6 +156,8 @@ On-call comes from the OnCall API, `GET <oncall>/api/v1/schedules/` and, for eac
 `Authorization: Bearer <token>` and `X-Grafana-URL: <instance url>`. The OnCall URL is `jsonData.onCallApiUrl` from
 `GET /api/plugins/grafana-irm-app/settings` (then `grafana-oncall-app`). Back-to-back shifts of one person are merged,
 so "until" is the end of the whole stretch. This needs `jq`, which Omarchy installs.
+The sparkline reads the rule with `GET /api/ruler/grafana/api/v1/rule/{uid}` (the uid is the alert's `__alert_rule_uid__`
+label) and runs its query with `POST /api/ds/query` for `now-1h` to `now`, 120 points, an instant query turned into a range one.
 Alerts are told apart by instance and fingerprint, so the same alert in prod and staging notifies twice.
 
 Polling, notifications and silences live in a single `service` (`AlertSource.qml`, `keepLoaded`). The bar widget on every
@@ -149,16 +167,12 @@ notification per alert, not two.
 ## Development
 
 ```bash
-node tests/alerts.test.js                 # pure logic: instances, matchers, parsing, ordering, grouping, silences, pending, on-call, demo data
+node tests/alerts.test.js                 # pure logic: instances, matchers, parsing, ordering, grouping, silences, pending, on-call, sparkline, demo data
 ln -s "$PWD" ~/.config/omarchy/plugins/dan4a.grafana-alerts
 omarchy plugin enable dan4a.grafana-alerts
 ```
 
 The shell does not hot-reload code reached through a symlink. Run `omarchy restart shell` after changes.
-
-## Roadmap
-
-- A sparkline for the alert's query with its threshold, drawn from `/api/ds/query`
 
 ## License
 

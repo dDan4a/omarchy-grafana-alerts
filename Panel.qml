@@ -63,6 +63,9 @@ Panel {
   }
 
   onItemsChanged: if (!current) selected = Alerts.firstRow(items)
+  // `current` is rebuilt on every poll, so this also refreshes the sparkline once its cache runs out.
+  onCurrentChanged: if (opened && source) source.showSpark(current)
+  onOpenedChanged: if (opened && source) source.showSpark(current)
 
   function headerText(item) {
     if (item.pending) return "Pending · " + item.count + (item.error !== "" ? " · could not load: " + item.error : "")
@@ -450,6 +453,77 @@ Panel {
                   font.pixelSize: Style.font.caption
                   elide: Text.ElideRight
                   textFormat: Text.PlainText
+                }
+
+                // The rule's query over the last hour with its threshold, for the selected alert only.
+                Column {
+                  id: sparkBox
+                  readonly property var spark: rowItem.isSelected && root.source ? root.source.sparks[rowItem.modelData.key] || null : null
+                  visible: !!spark
+                  width: parent.width
+                  topPadding: Style.space(4)
+                  spacing: Style.space(2)
+
+                  Canvas {
+                    id: sparkCanvas
+                    readonly property real inset: 2
+                    readonly property var geometry: sparkBox.spark
+                      ? Alerts.sparkGeometry(sparkBox.spark.points, sparkBox.spark.thresholds, width, height - 2 * inset) : null
+                    readonly property color lineColor: root.severityColor(rowItem.modelData)
+                    readonly property color thresholdColor: root.foreground
+                    width: parent.width
+                    height: Style.space(40)
+                    onGeometryChanged: requestPaint()
+                    onLineColorChanged: requestPaint()
+                    onThresholdColorChanged: requestPaint()
+                    onPaint: {
+                      var ctx = getContext("2d")
+                      ctx.reset()
+                      var g = geometry
+                      if (!g) return
+                      ctx.translate(0, inset)
+                      var line = g.line, last = line[line.length - 1]
+                      ctx.beginPath()
+                      ctx.moveTo(line[0].x, height)
+                      for (var i = 0; i < line.length; i++) ctx.lineTo(line[i].x, line[i].y)
+                      ctx.lineTo(last.x, height)
+                      ctx.closePath()
+                      ctx.globalAlpha = 0.14
+                      ctx.fillStyle = lineColor
+                      ctx.fill()
+                      // Dashed by hand: setLineDash is not in every Qt version's Context2D.
+                      ctx.globalAlpha = 0.55
+                      ctx.strokeStyle = thresholdColor
+                      ctx.lineWidth = 1
+                      ctx.beginPath()
+                      for (var t = 0; t < g.thresholds.length; t++) {
+                        var y = Math.round(g.thresholds[t]) + 0.5
+                        for (var x = 0; x < width; x += 7) { ctx.moveTo(x, y); ctx.lineTo(Math.min(x + 4, width), y) }
+                      }
+                      ctx.stroke()
+                      ctx.globalAlpha = 1
+                      ctx.strokeStyle = lineColor
+                      ctx.lineWidth = 1.5
+                      ctx.lineJoin = "round"
+                      ctx.beginPath()
+                      for (var j = 0; j < line.length; j++) j === 0 ? ctx.moveTo(line[j].x, line[j].y) : ctx.lineTo(line[j].x, line[j].y)
+                      ctx.stroke()
+                      ctx.fillStyle = lineColor
+                      ctx.beginPath()
+                      ctx.arc(Math.min(last.x, width - 2.5), last.y, 2.5, 0, 2 * Math.PI)
+                      ctx.fill()
+                    }
+                  }
+
+                  Text {
+                    width: parent.width
+                    text: sparkBox.spark ? Alerts.sparkCaption(sparkBox.spark) : ""
+                    color: root.dim
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                    textFormat: Text.PlainText
+                  }
                 }
               }
 

@@ -67,6 +67,12 @@ Item {
   readonly property var oncall: Alerts.oncallView(instances, oncallByInstance, oncallErrors, now)
   readonly property var oncallRange: Alerts.oncallRange(now)
 
+  // Sparklines by row key: { points, thresholds }. Only the panel's selected alert asks for one (showSpark), at most once
+  // per refresh interval; a failed request leaves no sparkline and the card as it was.
+  property var sparks: ({})
+  property var sparkLoadedAt: ({})
+  property var sparkQueued: null
+
   // The token is read inside sh and handed to curl on stdin, so it never shows up in argv / ps.
   // An empty token file ($1) sends no Authorization header: a plain Alertmanager often has none.
   // The remaining arguments go to curl.
@@ -122,6 +128,8 @@ Item {
       pendingErrors = {}
       oncallByInstance = {}
       oncallErrors = {}
+      sparks = {}
+      sparkLoadedAt = {}
     }
     poll()
   }
@@ -230,6 +238,30 @@ Item {
     expireProcess.command = ["sh", "-c", curlScript, "sh", expandHome(inst.tokenFile),
       "-X", "DELETE", Alerts.expireUrl(inst, silence.id)]
     expireProcess.running = true
+  }
+
+  // Rule (ruler API), then its query over the last hour (/api/ds/query); one request pair at a time, the latest ask waits.
+  function showSpark(row) {
+    var inst = row && !row.header && !row.isSilence ? instanceNamed(row.instance) : null
+    var uid = Alerts.ruleUid(row, inst)
+    if (uid === "" || Date.now() - (sparkLoadedAt[row.key] || 0) < Math.max(15, intervalSec) * 900) return
+    if (ruleProcess.running || sparkQueryProcess.running) { sparkQueued = row; return }
+    sparkLoadedAt[row.key] = Date.now()
+    if (demo) {
+      set("sparks", row.key, Alerts.demoSpark(row, Date.now()))
+      return
+    }
+    ruleProcess.row = row
+    ruleProcess.command = ["sh", "-c", curlScript, "sh", expandHome(inst.tokenFile), Alerts.ruleUrl(inst, uid)]
+    ruleProcess.running = true
+  }
+
+  function sparkDone(row, spark) {
+    if (spark) set("sparks", row.key, spark)
+    var next = sparkQueued
+    sparkQueued = null
+    // Later, so the process that just exited no longer counts as running.
+    if (next) Qt.callLater(showSpark, next)
   }
 
   // minutes 0 = until turned off; any call while DND is on turns it off.
@@ -367,6 +399,35 @@ Item {
           root.set("oncallErrors", modelData.name, "unexpected response: " + out.slice(0, 80))
         }
       }
+    }
+  }
+
+  Process {
+    id: ruleProcess
+    property var row: null
+    stdout: StdioCollector { id: ruleOut; waitForEnd: true }
+    onExited: function(exitCode) {
+      var q = null
+      try { q = exitCode === 0 ? Alerts.sparkQuery(JSON.parse(String(ruleOut.text || ""))) : null } catch (e) {}
+      var inst = root.instanceNamed(row.instance)
+      if (!q || !inst) { root.sparkDone(row, null); return }
+      sparkQueryProcess.row = row
+      sparkQueryProcess.query = q
+      sparkQueryProcess.command = ["sh", "-c", root.curlScript, "sh", root.expandHome(inst.tokenFile),
+        "-H", "Content-Type: application/json", "--data-binary", JSON.stringify(q.request), Alerts.dsQueryUrl(inst)]
+      sparkQueryProcess.running = true
+    }
+  }
+
+  Process {
+    id: sparkQueryProcess
+    property var row: null
+    property var query: null
+    stdout: StdioCollector { id: sparkOut; waitForEnd: true }
+    onExited: function(exitCode) {
+      var points = null
+      try { points = exitCode === 0 ? Alerts.sparkSeries(JSON.parse(String(sparkOut.text || "")), query.refId, row.labels) : null } catch (e) {}
+      root.sparkDone(row, points ? { points: points, thresholds: query.thresholds } : null)
     }
   }
 

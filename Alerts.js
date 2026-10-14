@@ -232,6 +232,7 @@ function normalizePending(raw, instance) {
           // Go timestamps carry nanoseconds, which QML's Date.parse may reject.
           startsAt: String(a.activeAt || "").replace(/(\.\d{3})\d+/, "$1"),
           url: rule.uid ? instance.url + "/alerting/grafana/" + rule.uid + "/view" : "",
+          ruleUid: String(rule.uid || ""),
           silenced: false
         })
       }
@@ -464,6 +465,122 @@ function oncallView(instances, byInstance, errors, nowMs) {
   return view
 }
 
+// Sparkline: the selected alert's rule query over the last hour with the rule's threshold. Grafana-managed rules only:
+// the rule comes from the ruler API (Grafana 11.3+), its query runs through /api/ds/query.
+var SPARK_WINDOW_MS = 3600000
+var SPARK_POINTS = 120
+
+// Firing alerts carry the rule in a label, pending rows in `ruleUid`. "" means no sparkline.
+function ruleUid(row, instance) {
+  if (!row || !instance || instance.type !== "grafana") return ""
+  return String(row.ruleUid || (row.labels && row.labels.__alert_rule_uid__) || "")
+}
+
+function ruleUrl(instance, uid) { return instance.url + "/api/ruler/grafana/api/v1/rule/" + encodeURIComponent(uid) }
+function dsQueryUrl(instance) { return instance.url + "/api/ds/query" }
+
+function isExpression(q) { return q.datasourceUid === "__expr__" || q.datasourceUid === "-100" }
+
+// One value for gt/lt, two for the range evaluators; anything else (no_value, missing params) gives none.
+function evaluatorValues(ev) {
+  var type = String((ev && ev.type) || "")
+  var n = /range/.test(type) ? 2 : type === "gt" || type === "lt" ? 1 : 0
+  var params = ((ev && ev.params) || []).slice(0, n).map(Number)
+  return params.length === n && params.every(isFinite) ? params : []
+}
+
+// Ruler API rule -> { refId, request (POST /api/ds/query body), thresholds }, or null when the rule has no datasource query.
+// The plotted query is the one the condition reads through threshold / classic condition and reduce steps. Only then is
+// the threshold comparable with the series; with math, resample or several classic conditions there is no threshold line.
+function sparkQuery(rule) {
+  var a = (rule && rule.grafana_alert) || {}
+  var data = a.data || [], byRef = {}
+  for (var i = 0; i < data.length; i++) if (data[i]) byRef[data[i].refId] = data[i]
+  var ref = a.condition, thresholds = []
+  var cond = byRef[ref], m = (cond && cond.model) || {}
+  if (cond && isExpression(cond) && m.type === "threshold") {
+    thresholds = evaluatorValues(m.conditions && m.conditions[0] && m.conditions[0].evaluator)
+    ref = m.expression
+  } else if (cond && isExpression(cond) && m.type === "classic_conditions" && (m.conditions || []).length === 1) {
+    var c = m.conditions[0] || {}
+    thresholds = evaluatorValues(c.evaluator)
+    ref = c.query && c.query.params && c.query.params[0]
+  }
+  // Reduce keeps the series' units, so the threshold still applies to the raw series.
+  for (var hops = 0; hops < data.length && byRef[ref] && isExpression(byRef[ref]) && (byRef[ref].model || {}).type === "reduce"; hops++)
+    ref = byRef[ref].model.expression
+  var q = byRef[ref]
+  if (!q || isExpression(q)) {
+    thresholds = []
+    q = data.filter(function(d) { return d && !isExpression(d) })[0]
+  }
+  if (!q) return null
+  var model = Object.assign({}, q.model, { refId: q.refId, datasource: { uid: q.datasourceUid }, hide: false,
+    intervalMs: SPARK_WINDOW_MS / SPARK_POINTS, maxDataPoints: SPARK_POINTS })
+  // Alert queries are often instant (one point); a sparkline needs the range form.
+  if (model.instant) { model.instant = false; model.range = true }
+  if (model.queryType === "instant") model.queryType = "range"
+  return { refId: q.refId, thresholds: thresholds, request: { from: "now-1h", to: "now", queries: [model] } }
+}
+
+// /api/ds/query response -> [{ t, v }] of the series whose labels all match the alert's labels (the most specific one),
+// else the first series. Frames may be one series each (Prometheus) or wide (several number fields). null if < 2 points.
+function sparkSeries(resp, refId, labels) {
+  var result = resp && resp.results && resp.results[refId]
+  if (!result || result.error) return null
+  var first = null, best = null, bestScore = -1
+  var frames = result.frames || []
+  for (var f = 0; f < frames.length; f++) {
+    var fields = (frames[f] && frames[f].schema && frames[f].schema.fields) || []
+    var values = (frames[f] && frames[f].data && frames[f].data.values) || []
+    var ti = -1
+    for (var k = 0; k < fields.length; k++) if (fields[k].type === "time") { ti = k; break }
+    if (ti < 0) continue
+    for (var j = 0; j < fields.length; j++) {
+      if (fields[j].type !== "number") continue
+      var series = { times: values[ti] || [], vals: values[j] || [] }
+      if (!first) first = series
+      var l = fields[j].labels || {}, score = 0
+      for (var key in l) score = score >= 0 && labels && String(labels[key]) === String(l[key]) ? score + 1 : -1
+      if (score > bestScore) { best = series; bestScore = score }
+    }
+  }
+  var pick = best || first
+  if (!pick) return null
+  var points = []
+  for (var p = 0; p < pick.times.length; p++) {
+    var v = pick.vals[p]
+    if (v !== null && v !== undefined && isFinite(v)) points.push({ t: Number(pick.times[p]), v: Number(v) })
+  }
+  points.sort(function(x, y) { return x.t - y.t })
+  return points.length >= 2 ? points : null
+}
+
+// Pixel coordinates for a w x h box: the y range covers the values and the thresholds, so a crossing is always visible.
+function sparkGeometry(points, thresholds, w, h) {
+  var vals = points.map(function(p) { return p.v }).concat(thresholds)
+  var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals)
+  if (hi === lo) { lo -= Math.abs(lo) * 0.1 || 1; hi += Math.abs(hi) * 0.1 || 1 }
+  var pad = (hi - lo) * 0.1
+  lo -= pad
+  hi += pad
+  var t0 = points[0].t, span = (points[points.length - 1].t - t0) || 1
+  function y(v) { return (hi - v) / (hi - lo) * h }
+  return {
+    line: points.map(function(p) { return { x: (p.t - t0) / span * w, y: y(p.v) } }),
+    thresholds: thresholds.map(y)
+  }
+}
+
+function formatValue(v) { return String(Number(Number(v).toPrecision(3))) }
+
+// "last 1h · now 1.9 · threshold 1" under the sparkline.
+function sparkCaption(spark) {
+  var parts = ["last 1h", "now " + formatValue(spark.points[spark.points.length - 1].v)]
+  if (spark.thresholds.length > 0) parts.push("threshold " + spark.thresholds.map(formatValue).join("–"))
+  return parts.join(" · ")
+}
+
 var DEMO_INSTANCES = [
   { name: "prod", type: "grafana", url: "https://grafana.example.com", tokenFile: "", matchers: [],
     oncall: { user: "you@example.com", url: "" } },
@@ -533,6 +650,32 @@ function demoOncall(nowMs, instance) {
   }
 }
 
+// Demo sparklines for the prod alerts (firing and pending): an hour of per-30s points that drift around the old level
+// and then cross the threshold to the value the summary quotes. Deterministic per alert, so it does not jump on refresh.
+var DEMO_SPARKS = {
+  "Disk almost full": { from: 9.5, to: 4.2, threshold: 5 },
+  "HTTP 5xx rate": { from: 0.7, to: 2.8, threshold: 2 },
+  "Payment latency p99": { from: 0.42, to: 1.9, threshold: 1 },
+  "TLS certificate expires soon": { from: 9.04, to: 9, threshold: 14 },
+  "Replication lag": { from: 6, to: 38, threshold: 30 },
+  "CPU saturation": { from: 58, to: 93, threshold: 90 }
+}
+
+function demoSpark(row, nowMs) {
+  var d = DEMO_SPARKS[row.name]
+  if (!d || row.instance !== "prod") return null
+  var seed = 0
+  for (var c = 0; c < row.key.length; c++) seed = (seed * 31 + row.key.charCodeAt(c)) % 1000
+  var step = SPARK_WINDOW_MS / SPARK_POINTS, end = Math.floor(nowMs / step) * step, points = []
+  for (var i = 0; i <= SPARK_POINTS; i++) {
+    var t = end - (SPARK_POINTS - i) * step, k = t / step
+    var ramp = Math.min(1, Math.max(0, (i - SPARK_POINTS * 0.55) / (SPARK_POINTS * 0.35)))
+    var noise = Math.sin(k * 0.9 + seed) * 0.6 + Math.sin(k * 0.23 + seed * 2) * 0.4
+    points.push({ t: t, v: d.from + (d.to - d.from) * ramp * ramp * (3 - 2 * ramp) + noise * Math.abs(d.to - d.from) * 0.06 })
+  }
+  return { points: points, thresholds: [d.threshold] }
+}
+
 // Demo data in the real API shape, for the two DEMO_INSTANCES. Every 2 minutes "Payment latency" starts
 // firing in prod while staging goes unreachable (null), so notifications, the badge and the
 // unreachable mark can all be seen without a real instance. An alert matched by one of the instance's
@@ -542,6 +685,7 @@ function demoAlerts(nowMs, silences, instance) {
   var phase = Math.floor(nowMs / 120000) % 2 === 0
   function ago(min) { return new Date(nowMs - min * 60000).toISOString() }
   function alert(fp, labels, annotations, startedMinAgo) {
+    if (instance === "prod") labels.__alert_rule_uid__ = fp
     var silenced = (silences || []).some(function(s) {
       return s.instance === instance && matchesAll(labels, s.matchers.map(function(m) { return parseMatcher(silenceMatcherText(m)) }))
     })
