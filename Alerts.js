@@ -160,6 +160,34 @@ function fingerprints(rows) {
   return set
 }
 
+// Do not disturb: `until` is 0 (off), DND_FOREVER (until turned off) or the end time in ms.
+var DND_FOREVER = -1
+
+function dndActive(until, nowMs) { return until === DND_FOREVER || until > nowMs }
+
+// Any press while active turns it off; otherwise on for `minutes`, or until turned off when minutes is 0.
+function dndToggle(until, nowMs, minutes) {
+  if (dndActive(until, nowMs)) return 0
+  return minutes > 0 ? nowMs + minutes * 60000 : DND_FOREVER
+}
+
+function dndText(until, nowMs) {
+  if (!dndActive(until, nowMs)) return ""
+  return until === DND_FOREVER ? "until turned off" : duration(new Date(nowMs).toISOString(), until) + " left"
+}
+
+// The saved file holds just the number; anything else counts as off.
+function parseDnd(text) {
+  var n = Number(String(text || "").trim())
+  return isFinite(n) && (n === DND_FOREVER || n > 0) ? n : 0
+}
+
+// What to announce for this poll. DND drops the notifications but the caller still records `known`,
+// so alerts that fired during DND are not replayed when it ends.
+function toNotify(rows, known, notify, dndUntil, nowMs) {
+  return notify && !dndActive(dndUntil, nowMs) ? newAlerts(rows, known) : []
+}
+
 // Pending alerts come from Grafana's Prometheus-compatible rules API; Alertmanager knows nothing about them.
 // `state=` keeps rules with pending (or firing, which may also have pending instances) alerts; older Grafana ignores it.
 function rulesUrl(instance) {

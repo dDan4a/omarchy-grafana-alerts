@@ -43,6 +43,12 @@ Item {
   property double updatedAt: 0
   property double now: Date.now()
 
+  // Do not disturb: local only, mutes this plugin's notifications. Saved next to other state so it survives a shell restart.
+  property double dndUntil: 0
+  readonly property bool dnd: Alerts.dndActive(dndUntil, now)
+  readonly property string dndText: Alerts.dndText(dndUntil, now)
+  readonly property string stateDir: Quickshell.env("HOME") + "/.local/state/dan4a.grafana-alerts"
+
   // Silences are loaded next to the alerts but kept apart: a failed request only marks the silences section.
   property var silencesByInstance: ({})
   property var silenceErrors: ({})
@@ -121,10 +127,8 @@ Item {
 
   function apply(name, raw) {
     var next = Alerts.normalize(raw, name)
-    if (notify) {
-      var fresh = Alerts.newAlerts(next, known[name] === undefined ? null : known[name])
-      for (var i = 0; i < fresh.length; i++) notifyAlert(fresh[i])
-    }
+    var fresh = Alerts.toNotify(next, known[name] === undefined ? null : known[name], notify, dndUntil, Date.now())
+    for (var i = 0; i < fresh.length; i++) notifyAlert(fresh[i])
     set("known", name, Alerts.fingerprints(next))
     set("rowsByInstance", name, next)
     set("errors", name, "")
@@ -196,6 +200,15 @@ Item {
     expireProcess.running = true
   }
 
+  // minutes 0 = until turned off; any call while DND is on turns it off.
+  function toggleDnd(minutes) {
+    now = Date.now()
+    dndUntil = Alerts.dndToggle(dndUntil, now, minutes)
+    dndWriter.command = ["sh", "-c", 'umask 077; mkdir -p "$1" && printf "%s\\n" "$2" > "$1/dnd.tmp" && mv "$1/dnd.tmp" "$1/dnd"',
+      "sh", stateDir, String(dndUntil)]
+    dndWriter.running = true
+  }
+
   onGrafanaUrlChanged: refresh()
   onTokenFileChanged: refresh()
 
@@ -209,9 +222,18 @@ Item {
     onLoadFailed: root.loadInstances(null)
   }
 
+  FileView {
+    path: root.stateDir + "/dnd"
+    printErrors: false
+    onLoaded: root.dndUntil = Alerts.parseDnd(text())
+  }
+
+  Process { id: dndWriter }
+
   IpcHandler {
     target: "dan4a.grafana-alerts"
     function refresh(): void { root.refresh() }
+    function dnd(minutes: int): void { root.toggleDnd(minutes) }
   }
 
   Timer {

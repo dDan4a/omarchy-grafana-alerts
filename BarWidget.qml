@@ -16,6 +16,7 @@ BarWidget {
   readonly property var source: bar && bar.shell ? bar.shell.serviceFor("dan4a.grafana-alerts") : null
   readonly property var summary: source ? source.summary : ({ critical: 0, warning: 0, info: 0, silenced: 0, total: 0 })
   readonly property string error: source ? source.error : ""
+  readonly property bool dnd: source ? source.dnd === true : false
 
   function open() { if (panelLoader.item) panelLoader.item.open() }
   function close() { if (panelLoader.item) panelLoader.item.close() }
@@ -61,13 +62,14 @@ BarWidget {
     anchors.fill: parent
     bar: root.bar
     active: root.opened
-    // nf-md-bell / nf-md-bell_alert
-    text: root.summary.total > 0 ? "󰂞 " + root.summary.total : "󰂚"
+    // nf-md-bell / nf-md-bell_alert; nf-md-bell_off while do not disturb is on
+    text: (root.dnd ? "󰂛" : root.summary.total > 0 ? "󰂞" : "󰂚") + (root.summary.total > 0 ? " " + root.summary.total : "")
     foreground: root.summary.critical > 0 ? Color.urgent : (root.bar ? root.bar.barForeground : Color.foreground)
     dimmed: root.summary.total === 0 && root.error === ""
-    tooltipText: root.error !== "" ? "Alerts: " + root.error
+    tooltipText: (root.error !== "" ? "Alerts: " + root.error
       : root.summary.total === 0 ? "Alerts: all quiet"
-      : "Alerts: " + root.summary.critical + " critical, " + root.summary.warning + " warning, " + root.summary.info + " info"
+      : "Alerts: " + root.summary.critical + " critical, " + root.summary.warning + " warning, " + root.summary.info + " info")
+      + (root.dnd ? "\nDo not disturb: " + root.source.dndText : "")
     onPressed: root.togglePanel()
   }
 }

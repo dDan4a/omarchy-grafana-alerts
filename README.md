@@ -6,6 +6,8 @@ Firing alerts from Grafana and Prometheus Alertmanager in the Omarchy bar.
 - Click it for the list of alerts with severity, duration, summary and labels, grouped by instance.
 - **Several instances**: prod and staging Grafana, a plain Alertmanager. One that is down is marked in the panel; the others keep working.
 - A desktop notification fires for every new alert.
+- **Do not disturb** mutes those notifications for an hour or until you turn it off. It is local: nothing is created in
+  Grafana or Alertmanager, alerts keep updating and counting in the badge, and the bell in the bar is crossed out.
 - Silence an alert for an hour, or open its source, with one click or one key. Both go to the instance the alert came from.
 - **Pending** alerts (the condition holds, but the rule's `for` has not run out yet) get their own section with how long they
   have been pending. They don't count in the badge and don't notify; once one fires it moves to the main list. Grafana only.
@@ -80,6 +82,8 @@ With the panel open:
 | `Enter` | Open the selected alert's source (its `generatorURL`) |
 | `s` | Silence the selected alert for 1 hour |
 | `u` | Expire the selected silence |
+| `d` | Do not disturb for 1 hour; turns it off when it is on |
+| `D` | Do not disturb until turned off; turns it off when it is on |
 | `r` | Refresh now |
 
 You can also drive it from the command line:
@@ -87,7 +91,12 @@ You can also drive it from the command line:
 ```bash
 omarchy-shell shell toggle dan4a.grafana-alerts '{}'   # opens on the focused monitor, good for a keybinding
 omarchy-shell dan4a.grafana-alerts refresh
+omarchy-shell dan4a.grafana-alerts dnd 60      # do not disturb for 60 minutes, 0 = until turned off; on when off, off when on
 ```
+
+The panel shows how long do not disturb has left. Alerts that fire during it are not announced afterwards: they are
+already in the list. The state is kept in `~/.local/state/dan4a.grafana-alerts/dnd` (the end time in ms, `-1` for
+"until turned off"), so it survives `omarchy restart shell`.
 
 ## How it works
 

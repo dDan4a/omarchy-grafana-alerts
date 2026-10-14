@@ -94,7 +94,9 @@ Panel {
       onTabRequested: function(direction) { root.switchPanel(direction) }
       onTextKey: function(text) {
         var key = text.toLowerCase()
-        if (key === "r") root.source.refresh()
+        if (text === "d") root.source.toggleDnd(60)
+        else if (text === "D") root.source.toggleDnd(0)
+        else if (key === "r") root.source.refresh()
         else if (key === "s" && root.current && !root.current.isSilence && !root.current.isPending && !root.current.silenced)
           root.source.silence(root.current, 60)
         else if (key === "u" && root.current && root.current.isSilence)
@@ -114,7 +116,7 @@ Panel {
           foreground: root.foreground
           fontFamily: root.fontFamily
           iconComponent: Text {
-            text: root.summary.total > 0 ? "󰂞" : "󰂚"
+            text: root.source && root.source.dnd ? "󰂛" : root.summary.total > 0 ? "󰂞" : "󰂚"
             color: root.summary.critical > 0 ? Color.urgent : root.foreground
             font.family: root.fontFamily
             font.pixelSize: Style.font.display
@@ -129,6 +131,54 @@ Panel {
           font.pixelSize: Style.font.caption
           wrapMode: Text.Wrap
           textFormat: Text.PlainText
+        }
+
+        // Do not disturb: only this plugin's desktop notifications are muted; alerts keep updating.
+        Item {
+          width: parent.width
+          height: dndButtons.implicitHeight
+
+          Text {
+            anchors.left: parent.left
+            anchors.right: dndButtons.left
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.source && root.source.dnd ? "󰂛 Do not disturb · " + root.source.dndText : "Do not disturb"
+            color: root.source && root.source.dnd ? root.foreground : root.dim
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.body
+            elide: Text.ElideRight
+          }
+
+          Row {
+            id: dndButtons
+            anchors.right: parent.right
+            spacing: Style.space(4)
+
+            Button {
+              visible: !!root.source && root.source.dnd
+              text: "Turn off"
+              tooltipText: "d"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.source.toggleDnd(0)
+            }
+            Button {
+              visible: !!root.source && !root.source.dnd
+              text: "1 hour"
+              tooltipText: "d"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.source.toggleDnd(60)
+            }
+            Button {
+              visible: !!root.source && !root.source.dnd
+              text: "Until turned off"
+              tooltipText: "Shift+D"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              onClicked: root.source.toggleDnd(0)
+            }
+          }
         }
 
         PanelSeparator { width: parent.width }
@@ -363,7 +413,7 @@ Panel {
 
         Text {
           width: parent.width
-          text: "↑↓ select · Enter open · s silence 1h · u expire silence · r refresh"
+          text: "↑↓ select · Enter open · s silence 1h · u expire silence · d / D do not disturb · r refresh"
           color: root.dim
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption

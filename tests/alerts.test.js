@@ -7,7 +7,7 @@ const path = require("path")
 const src = fs.readFileSync(path.join(__dirname, "..", "Alerts.js"), "utf8").replace(/^\.pragma library\s*$/m, "")
 const A = new Function(src + "; return { severityOf, displayLabels, parseInstances, apiBase, normalize, summarize, newAlerts, fingerprints, " +
   "panelItems, step, parseMatcher, matcherText, matchesAll, alertsUrl, firstRow, duration, silenceBody, demoAlerts, DEMO_INSTANCES, " +
-  "remaining, silencesUrl, expireUrl, normalizeSilences, demoSilences, rulesUrl, normalizePending, demoPending }")()
+  "remaining, silencesUrl, expireUrl, normalizeSilences, demoSilences, rulesUrl, normalizePending, demoPending, DND_FOREVER, dndActive, dndToggle, dndText, parseDnd, toNotify }")()
 
 const NOW = Date.parse("2026-10-10T12:00:00Z")
 
@@ -196,5 +196,31 @@ const pendOff = A.normalizePending(A.demoPending(120000, "prod"), A.DEMO_INSTANC
 assert.deepStrictEqual(pendOn, ["CPU saturation", "Replication lag"])
 assert.ok(pendOff.includes("Payment latency p99") && pendOff.length === 3)
 assert.ok(on.some(r => r.name === "Payment latency p99") && !off.some(r => r.name === "Payment latency p99"))
+
+// do not disturb: 1 hour expires on its own, "until turned off" does not, any press while on turns it off
+const HOUR = 3600000
+const dnd1h = A.dndToggle(0, NOW, 60)
+assert.strictEqual(dnd1h, NOW + HOUR)
+assert.ok(A.dndActive(dnd1h, NOW + HOUR - 1) && !A.dndActive(dnd1h, NOW + HOUR))
+assert.strictEqual(A.dndText(dnd1h, NOW + 15 * 60000), "45m left")
+assert.strictEqual(A.dndText(dnd1h, NOW + HOUR), "")
+assert.strictEqual(A.dndToggle(dnd1h, NOW, 0), 0)
+assert.strictEqual(A.dndToggle(dnd1h, NOW + HOUR, 0), A.DND_FOREVER)
+assert.ok(A.dndActive(A.DND_FOREVER, NOW + 1000 * HOUR))
+assert.strictEqual(A.dndText(A.DND_FOREVER, NOW), "until turned off")
+assert.strictEqual(A.dndToggle(A.DND_FOREVER, NOW, 60), 0)
+assert.ok(!A.dndActive(0, NOW))
+assert.strictEqual(A.parseDnd(String(dnd1h) + "\n"), dnd1h)
+assert.strictEqual(A.parseDnd("-1"), A.DND_FOREVER)
+for (const bad of [null, "", "garbage", "-5", "Infinity"]) assert.strictEqual(A.parseDnd(bad), 0)
+
+// notifications are muted during DND; alerts seen during it are known afterwards, so none are replayed
+const before = A.normalize(raw.slice(0, 1), "prod")
+const during = A.normalize(raw, "prod")
+assert.ok(during.length > before.length)
+assert.deepStrictEqual(A.toNotify(during, A.fingerprints(before), true, dnd1h, NOW), [])
+assert.ok(A.toNotify(during, A.fingerprints(before), true, 0, NOW).length > 0)
+assert.deepStrictEqual(A.toNotify(during, A.fingerprints(before), false, 0, NOW), [])
+assert.deepStrictEqual(A.toNotify(during, A.fingerprints(during), true, dnd1h, NOW + HOUR), [])
 
 console.log("ok")
