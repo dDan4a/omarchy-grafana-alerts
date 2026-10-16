@@ -5,7 +5,8 @@ Firing alerts from Grafana and Prometheus Alertmanager in the Omarchy bar.
 - The bell turns red when something critical fires and shows how many alerts need attention, across all instances.
 - Click it for the list of alerts with severity, duration, summary and labels, grouped by instance.
 - **Several instances**: prod and staging Grafana, a plain Alertmanager. One that is down is marked in the panel; the others keep working.
-- A desktop notification fires for every new alert.
+- A desktop notification tells how many new alerts fired (and how many are critical). Alert names and summaries
+  stay in the panel: notification text is visible in the process list, so it carries only the counts.
 - **Do not disturb** mutes those notifications for an hour or until you turn it off. It is local: nothing is created in
   Grafana or Alertmanager, alerts keep updating and counting in the badge, and the bell in the bar is crossed out.
 - Silence an alert for an hour, or open its source, with one click or one key. Both go to the instance the alert came from.
@@ -24,7 +25,12 @@ Firing alerts from Grafana and Prometheus Alertmanager in the Omarchy bar.
 omarchy plugin add https://github.com/dDan4a/omarchy-grafana-alerts.git --enable --yes
 ```
 
-The plugin starts in demo mode with two fake instances. Set it up to connect to your Grafana:
+That is all it takes: the plugin works right away in **demo mode**, with two fake instances (prod and staging), firing
+and pending alerts, silences, on-call and sparklines, so you can try every part of the panel without a server.
+Nothing else needs to be installed: it uses `curl`, `notify-send` and `jq`, which Omarchy ships.
+
+The token file and `instances.json` below are only needed to connect real Grafana or Alertmanager instances.
+To connect one Grafana:
 
 1. Create a **service account** in Grafana (Administration → Service accounts) with the Viewer role.
    To silence alerts from the bar, the account also needs `alert.silences:create`; to expire silences, `alert.silences:write`.
@@ -33,7 +39,7 @@ The plugin starts in demo mode with two fake instances. Set it up to connect to 
 2. Put its token in a file that only you can read:
    ```bash
    mkdir -p ~/.config/grafana-alerts
-   install -m 600 /dev/stdin ~/.config/grafana-alerts/token <<< 'glsa_...'
+   (umask 077; printf '%s' 'glsa_...' > ~/.config/grafana-alerts/token)
    ```
 3. Set **Grafana URL** in the widget settings (bar settings → Grafana Alerts), for example `https://grafana.example.com`.
 
@@ -111,7 +117,8 @@ In demo mode every prod alert has a sparkline that crosses its threshold.
 Alertmanager behind basic auth or mTLS is not supported yet.
 
 The token never goes into `shell.json`. The plugin reads it inside `sh` and passes it to `curl` on stdin,
-so it doesn't appear in the process list either.
+so it doesn't appear in the process list either. Request bodies (a new silence, the sparkline query) reach `curl` the
+same way, through a file descriptor rather than its arguments.
 
 ## Keys
 
@@ -158,11 +165,11 @@ On-call comes from the OnCall API, `GET <oncall>/api/v1/schedules/` and, for eac
 so "until" is the end of the whole stretch. This needs `jq`, which Omarchy installs.
 The sparkline reads the rule with `GET /api/ruler/grafana/api/v1/rule/{uid}` (the uid is the alert's `__alert_rule_uid__`
 label) and runs its query with `POST /api/ds/query` for `now-1h` to `now`, 120 points, an instant query turned into a range one.
-Alerts are told apart by instance and fingerprint, so the same alert in prod and staging notifies twice.
+Alerts are told apart by instance and fingerprint, so the same alert in prod and staging counts twice.
 
 Polling, notifications and silences live in a single `service` (`AlertSource.qml`, `keepLoaded`). The bar widget on every
 monitor reads that one instance through `bar.shell.serviceFor(...)`. With two monitors you therefore get one poll and one
-notification per alert, not two.
+notification, not two.
 
 ## Development
 
@@ -173,6 +180,15 @@ omarchy plugin enable dan4a.grafana-alerts
 ```
 
 The shell does not hot-reload code reached through a symlink. Run `omarchy restart shell` after changes.
+
+## Remove
+
+```bash
+omarchy plugin remove dan4a.grafana-alerts
+rm -r ~/.config/grafana-alerts ~/.local/state/dan4a.grafana-alerts   # token, instances file, do-not-disturb state
+```
+
+The plugin writes only `~/.local/state/dan4a.grafana-alerts/dnd`; the token and `instances.json` are files you create.
 
 ## License
 

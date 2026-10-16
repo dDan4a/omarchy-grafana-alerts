@@ -75,11 +75,12 @@ Item {
 
   // The token is read inside sh and handed to curl on stdin, so it never shows up in argv / ps.
   // An empty token file ($1) sends no Authorization header: a plain Alertmanager often has none.
+  // A request body comes in $GA_BODY and reaches curl on fd 3 (`--data-binary @/dev/fd/3`), also outside argv.
   // The remaining arguments go to curl.
   readonly property string curlScript:
     'set -e; f=$1; shift; t=""; if [ -n "$f" ]; then t=$(cat "$f"); fi; ' +
     'if [ -n "$t" ]; then printf \'header = "Authorization: Bearer %s"\\n\' "$t"; fi | ' +
-    'curl -sS --fail-with-body --max-time 10 -K - "$@"'
+    'curl -sS --fail-with-body --max-time 10 -K - "$@" 3<<GA_BODY_END\n${GA_BODY:-}\nGA_BODY_END\n'
 
   // OnCall API with the instance's service account token (Bearer + X-Grafana-URL). Its URL comes from the IRM
   // (or OSS OnCall) plugin settings unless $3 sets it. Prints { schedules, shifts: [{ id, shifts }] } with the final
@@ -168,7 +169,7 @@ Item {
   function apply(name, raw) {
     var next = Alerts.normalize(raw, name)
     var fresh = Alerts.toNotify(next, known[name] === undefined ? null : known[name], notify, dndUntil, Date.now())
-    for (var i = 0; i < fresh.length; i++) notifyAlert(fresh[i])
+    if (fresh.length > 0) notifyAlerts(fresh)
     set("known", name, Alerts.fingerprints(next))
     set("rowsByInstance", name, next)
     set("errors", name, "")
@@ -194,15 +195,19 @@ Item {
     root[prop] = m
   }
 
-  function notifyAlert(row) {
-    var body = row.summary || row.labelText
+  // Alert names and summaries stay out of notify-send's argv (readable by every local user via /proc): the
+  // notification only counts, the panel shows the alerts.
+  function notifyAlerts(rows) {
+    var critical = rows.filter(function(r) { return r.severity === "critical" }).length
+    var body = rows.length === 1 ? "1 new firing alert" : rows.length + " new firing alerts"
+    if (critical > 0) body += " (" + critical + " critical)"
     Quickshell.execDetached(["notify-send", "--app-name=Grafana Alerts",
-      "-u", row.severity === "critical" ? "critical" : "normal",
-      "--", row.name, instances.length > 1 ? "[" + row.instance + "] " + body : body])
+      "-u", critical > 0 ? "critical" : "normal", "--", "Grafana Alerts", body])
   }
 
   function openAlert(row) {
-    if (row.url !== "") Qt.openUrlExternally(row.url)
+    // generatorURL comes from the server: open web links only, never file:// or app schemes.
+    if (/^https?:\/\//i.test(row.url)) Qt.openUrlExternally(row.url)
   }
 
   function silence(row, minutes) {
@@ -220,8 +225,8 @@ Item {
     silenceProcess.instance = inst.name
     silenceProcess.command = ["sh", "-c", curlScript, "sh", expandHome(inst.tokenFile),
       "-H", "Content-Type: application/json",
-      "--data-binary", JSON.stringify(Alerts.silenceBody(row, minutes, Date.now(), Quickshell.env("USER"))),
-      Alerts.apiBase(inst) + "/silences"]
+      "--data-binary", "@/dev/fd/3", Alerts.apiBase(inst) + "/silences"]
+    silenceProcess.environment = { GA_BODY: JSON.stringify(Alerts.silenceBody(row, minutes, Date.now(), Quickshell.env("USER"))) }
     silenceProcess.running = true
   }
 
@@ -414,7 +419,8 @@ Item {
       sparkQueryProcess.row = row
       sparkQueryProcess.query = q
       sparkQueryProcess.command = ["sh", "-c", root.curlScript, "sh", root.expandHome(inst.tokenFile),
-        "-H", "Content-Type: application/json", "--data-binary", JSON.stringify(q.request), Alerts.dsQueryUrl(inst)]
+        "-H", "Content-Type: application/json", "--data-binary", "@/dev/fd/3", Alerts.dsQueryUrl(inst)]
+      sparkQueryProcess.environment = { GA_BODY: JSON.stringify(q.request) }
       sparkQueryProcess.running = true
     }
   }
