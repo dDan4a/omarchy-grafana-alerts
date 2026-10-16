@@ -73,23 +73,30 @@ Item {
   property var sparkLoadedAt: ({})
   property var sparkQueued: null
 
-  // The token is read inside sh and handed to curl on stdin, so it never shows up in argv / ps.
-  // An empty token file ($1) sends no Authorization header: a plain Alertmanager often has none.
-  // A request body comes in $GA_BODY and reaches curl on fd 3 (`--data-binary @/dev/fd/3`), also outside argv.
-  // The remaining arguments go to curl.
+  // Nothing private goes into argv (readable by every local user via /proc/<pid>/cmdline): the token ($1 names its
+  // file) and the URL ($GA_URL) reach curl as a `-K -` config on stdin, a request body ($GA_BODY) on fd 3
+  // (`--data-binary @/dev/fd/3`). An empty token file sends no Authorization header: a plain Alertmanager often has none.
+  // A URL with a quote, backslash or newline is refused: it could break out of its config line. The remaining
+  // arguments are curl flags.
   readonly property string curlScript:
-    'set -e; f=$1; shift; t=""; if [ -n "$f" ]; then t=$(cat "$f"); fi; ' +
-    'if [ -n "$t" ]; then printf \'header = "Authorization: Bearer %s"\\n\' "$t"; fi | ' +
+    'set -e; f=$1; shift; u=${GA_URL:?no URL}; ' +
+    'case $u in *[\\"\\\\]*|*"\n"*) echo "bad URL: quote, backslash or newline" >&2; exit 2;; esac; ' +
+    't=""; if [ -n "$f" ]; then t=$(cat "$f"); fi; ' +
+    '{ if [ -n "$t" ]; then printf \'header = "Authorization: Bearer %s"\\n\' "$t"; fi; printf \'url = "%s"\\n\' "$u"; } | ' +
     'curl -sS --fail-with-body --max-time 10 -K - "$@" 3<<GA_BODY_END\n${GA_BODY:-}\nGA_BODY_END\n'
 
   // OnCall API with the instance's service account token (Bearer + X-Grafana-URL). Its URL comes from the IRM
   // (or OSS OnCall) plugin settings unless $3 sets it. Prints { schedules, shifts: [{ id, shifts }] } with the final
   // shifts of every schedule from $4 to $5. Args: token file, Grafana URL, OnCall URL or "", start date, end date.
+  // Like curlScript, nothing goes into argv: URLs and headers are in curl's stdin config, responses only travel through
+  // pipes (printf is a builtin). Schedules carry private iCal URLs: only their id and name are kept.
   // ponytail: first page only (100 schedules, 100 shifts each); follow `next` if that is ever too few.
   readonly property string oncallScript:
     'set -e; command -v jq >/dev/null || { echo "needs jq" >&2; exit 127; }; ' +
-    't=$(cat "$1"); g=$2; api=$3; ' +
-    'c() { printf \'header = "Authorization: Bearer %s"\\n\' "$t" | curl -sS --fail-with-body --max-time 10 -K - -H "X-Grafana-URL: $g" "$@"; }; ' +
+    'v() { case $1 in *[\\"\\\\]*|*"\n"*) echo "bad URL: quote, backslash or newline" >&2; exit 2;; esac; }; ' +
+    't=$(cat "$1"); g=$2; api=$3; v "$g"; ' +
+    'c() { v "$1"; printf \'header = "Authorization: Bearer %s"\\nheader = "X-Grafana-URL: %s"\\nurl = "%s"\\n\' "$t" "$g" "$1" | ' +
+    'curl -sS --fail-with-body --max-time 10 -K -; }; ' +
     'if [ -z "$api" ]; then for p in grafana-irm-app grafana-oncall-app; do ' +
     'api=$(c "$g/api/plugins/$p/settings" 2>/dev/null | jq -r ".jsonData.onCallApiUrl // empty" 2>/dev/null) || api=""; ' +
     '[ -n "$api" ] && break; done; fi; ' +
@@ -97,8 +104,8 @@ Item {
     'api=${api%/}; s=$(c "$api/api/v1/schedules/?perpage=100"); out=""; ' +
     'for id in $(printf "%s" "$s" | jq -r ".results[].id"); do ' +
     'r=$(c "$api/api/v1/schedules/$id/final_shifts?start_date=$4&end_date=$5&perpage=100"); ' +
-    'out="$out$(printf "%s" "$r" | jq -c --arg id "$id" "{id: \\$id, shifts: .results}")"; done; ' +
-    'printf "%s" "$out" | jq -s --argjson s "$(printf "%s" "$s" | jq -c .results)" "{schedules: \\$s, shifts: .}"'
+    'out="$out$({ printf "%s\\n" "$id" | jq -R .; printf "%s" "$r"; } | jq -cs "{id: .[0], shifts: .[1].results}")"; done; ' +
+    '{ printf "%s" "$s" | jq -c "[.results[] | {id, name}]"; printf "%s" "$out"; } | jq -s "{schedules: .[0], shifts: .[1:]}"'
 
   function expandHome(p) { return String(p || "").replace(/^~(?=\/)/, Quickshell.env("HOME")) }
   function instanceNamed(name) {
@@ -225,8 +232,8 @@ Item {
     silenceProcess.instance = inst.name
     silenceProcess.command = ["sh", "-c", curlScript, "sh", expandHome(inst.tokenFile),
       "-H", "Content-Type: application/json",
-      "--data-binary", "@/dev/fd/3", Alerts.apiBase(inst) + "/silences"]
-    silenceProcess.environment = { GA_BODY: JSON.stringify(Alerts.silenceBody(row, minutes, Date.now(), Quickshell.env("USER"))) }
+      "--data-binary", "@/dev/fd/3"]
+    silenceProcess.environment = { GA_URL: Alerts.apiBase(inst) + "/silences", GA_BODY: JSON.stringify(Alerts.silenceBody(row, minutes, Date.now(), Quickshell.env("USER"))) }
     silenceProcess.running = true
   }
 
@@ -241,7 +248,8 @@ Item {
     if (!inst || expireProcess.running) return
     expireProcess.instance = inst.name
     expireProcess.command = ["sh", "-c", curlScript, "sh", expandHome(inst.tokenFile),
-      "-X", "DELETE", Alerts.expireUrl(inst, silence.id)]
+      "-X", "DELETE"]
+    expireProcess.environment = { GA_URL: Alerts.expireUrl(inst, silence.id) }
     expireProcess.running = true
   }
 
@@ -257,7 +265,8 @@ Item {
       return
     }
     ruleProcess.row = row
-    ruleProcess.command = ["sh", "-c", curlScript, "sh", expandHome(inst.tokenFile), Alerts.ruleUrl(inst, uid)]
+    ruleProcess.command = ["sh", "-c", curlScript, "sh", expandHome(inst.tokenFile)]
+    ruleProcess.environment = { GA_URL: Alerts.ruleUrl(inst, uid) }
     ruleProcess.running = true
   }
 
@@ -326,8 +335,8 @@ Item {
     model: root.configured
     delegate: Process {
       required property var modelData
-      command: ["sh", "-c", root.curlScript, "sh", root.expandHome(modelData.tokenFile),
-        Alerts.alertsUrl(modelData)]
+      command: ["sh", "-c", root.curlScript, "sh", root.expandHome(modelData.tokenFile)]
+      environment: ({ GA_URL: Alerts.alertsUrl(modelData) })
       stdout: StdioCollector { id: fetchOut; waitForEnd: true }
       stderr: StdioCollector { id: fetchErr; waitForEnd: true }
       onExited: function(exitCode) {
@@ -347,7 +356,8 @@ Item {
     model: root.configured
     delegate: Process {
       required property var modelData
-      command: ["sh", "-c", root.curlScript, "sh", root.expandHome(modelData.tokenFile), Alerts.silencesUrl(modelData)]
+      command: ["sh", "-c", root.curlScript, "sh", root.expandHome(modelData.tokenFile)]
+      environment: ({ GA_URL: Alerts.silencesUrl(modelData) })
       stdout: StdioCollector { id: silencesOut; waitForEnd: true }
       stderr: StdioCollector { id: silencesErr; waitForEnd: true }
       onExited: function(exitCode) {
@@ -368,7 +378,8 @@ Item {
     model: root.grafanaInstances
     delegate: Process {
       required property var modelData
-      command: ["sh", "-c", root.curlScript, "sh", root.expandHome(modelData.tokenFile), Alerts.rulesUrl(modelData)]
+      command: ["sh", "-c", root.curlScript, "sh", root.expandHome(modelData.tokenFile)]
+      environment: ({ GA_URL: Alerts.rulesUrl(modelData) })
       stdout: StdioCollector { id: pendingOut; waitForEnd: true }
       stderr: StdioCollector { id: pendingErr; waitForEnd: true }
       onExited: function(exitCode) {
@@ -419,8 +430,8 @@ Item {
       sparkQueryProcess.row = row
       sparkQueryProcess.query = q
       sparkQueryProcess.command = ["sh", "-c", root.curlScript, "sh", root.expandHome(inst.tokenFile),
-        "-H", "Content-Type: application/json", "--data-binary", "@/dev/fd/3", Alerts.dsQueryUrl(inst)]
-      sparkQueryProcess.environment = { GA_BODY: JSON.stringify(q.request) }
+        "-H", "Content-Type: application/json", "--data-binary", "@/dev/fd/3"]
+      sparkQueryProcess.environment = { GA_URL: Alerts.dsQueryUrl(inst), GA_BODY: JSON.stringify(q.request) }
       sparkQueryProcess.running = true
     }
   }

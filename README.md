@@ -116,9 +116,10 @@ In demo mode every prod alert has a sparkline that crosses its threshold.
 
 Alertmanager behind basic auth or mTLS is not supported yet.
 
-The token never goes into `shell.json`. The plugin reads it inside `sh` and passes it to `curl` on stdin,
-so it doesn't appear in the process list either. Request bodies (a new silence, the sparkline query) reach `curl` the
-same way, through a file descriptor rather than its arguments.
+The token never goes into `shell.json`, and nothing private goes into a command line (readable by every local user):
+the token, the URL and its filters reach `curl` as a config on stdin, request bodies (a new silence, the sparkline
+query) on a file descriptor, and API responses travel between `curl` and `jq` only through pipes. On-call schedules
+keep only their id and name; their private calendar links are dropped right after the request.
 
 ## Keys
 
