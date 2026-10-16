@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "dan4a.grafana-alerts",
   "name": "Grafana Alerts",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "dDan4a",
   "license": "MIT",
   "description": "Firing alerts from one or more Grafana and Prometheus Alertmanager instances in the Omarchy bar: severity badge, alert list grouped by instance with a sparkline of the rule query and its threshold, desktop notifications, one-key silence, list and expire active silences, local do not disturb, who is on call in Grafana OnCall and your next shifts. Works in demo mode without a server.",

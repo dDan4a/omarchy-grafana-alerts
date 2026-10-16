@@ -1,6 +1,17 @@
-# Grafana Alerts for Omarchy
+<div align="center">
+
+<h1>Grafana Alerts for Omarchy</h1>
 
 Firing alerts from Grafana and Prometheus Alertmanager in the Omarchy bar.
+
+[![test](https://github.com/dDan4a/omarchy-grafana-alerts/actions/workflows/test.yml/badge.svg)](https://github.com/dDan4a/omarchy-grafana-alerts/actions/workflows/test.yml)
+[![tag](https://img.shields.io/github/v/tag/dDan4a/omarchy-grafana-alerts?sort=semver&label=version)](https://github.com/dDan4a/omarchy-grafana-alerts/tags)
+[![Omarchy plugin](https://img.shields.io/badge/Omarchy_plugin-verified-7aa2f7)](https://omarchyplugins.com/plugin.html?id=dan4a.grafana-alerts)
+[![license](https://img.shields.io/github/license/dDan4a/omarchy-grafana-alerts)](LICENSE)
+
+<img src="preview.png" alt="The Grafana Alerts panel in the Omarchy bar, in demo mode" width="900">
+
+</div>
 
 - The bell turns red when something critical fires and shows how many alerts need attention, across all instances.
 - Click it for the list of alerts with severity, duration, summary and labels, grouped by instance.
