@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  qml:
+    uses: dDan4a/ci/.github/workflows/qml-lint.yml@v1
+  biome:
+    uses: dDan4a/ci/.github/workflows/js-biome.yml@v1
+  actionlint:
+    uses: dDan4a/ci/.github/workflows/actionlint.yml@v1
+  zizmor:
+    uses: dDan4a/ci/.github/workflows/zizmor.yml@v1
+  gitleaks:
+    uses: dDan4a/ci/.github/workflows/gitleaks.yml@v1
+  typos:
+    uses: dDan4a/ci/.github/workflows/typos.yml@v1
+
+  biome-alerts:
+    name: biome (Alerts.js)
+    runs-on: ubuntu-latest
+    env:
+      BIOME_VERSION: 2.6.6
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Biome on Alerts.js with its QML pragma commented out
+        run: |
+          sed -i 's|^\.pragma library$|// .pragma library|' Alerts.js
+          jq '.files.includes -= ["!Alerts.js"]' biome.json > "$RUNNER_TEMP/biome.json"
+          mv "$RUNNER_TEMP/biome.json" biome.json
+          npx --yes "@biomejs/biome@$BIOME_VERSION" ci Alerts.js
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: lts/*
+      - run: node --test
+
+  manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: jq -e '.id and .entryPoints.service and .entryPoints.barWidget' manifest.json

@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import Quickshell
 import qs.Commons
@@ -20,17 +22,23 @@ Panel {
 
   readonly property var rows: source ? source.rows : []
   // Rows grouped by instance, with a header per instance when there are several, then pending alerts and active silences.
-  readonly property var items: source
-    ? Alerts.panelItems(source.instances, source.rowsByInstance, source.errors, source.silencesByInstance, source.silenceErrors,
-      source.pendingByInstance, source.pendingErrors) : []
+  readonly property var items: source ? Alerts.panelItems(source.instances, source.rowsByInstance, source.errors, source.silencesByInstance,
+                                                          source.silenceErrors, source.pendingByInstance, source.pendingErrors) : []
   readonly property var current: selected >= 0 && selected < items.length && !items[selected].header ? items[selected] : null
   readonly property var summary: source ? source.summary : Alerts.summarize([])
   readonly property var oncall: source ? source.oncall : Alerts.oncallView([], {}, {}, 0)
   property int selected: 0
 
-  function open() { root.selected = Alerts.firstRow(root.items); root.controller.show() }
-  function close() { root.controller.hide() }
-  function toggle() { root.opened ? root.close() : root.open() }
+  function open() {
+    root.selected = Alerts.firstRow(root.items)
+    root.controller.show()
+  }
+  function close() {
+    root.controller.hide()
+  }
+  function toggle() {
+    root.opened ? root.close() : root.open()
+  }
   function switchPanel(direction) {
     if (root.bar && typeof root.bar.switchPanelFrom === "function")
       return root.bar.switchPanelFrom(root.barIdentity, direction)
@@ -38,40 +46,57 @@ Panel {
   }
 
   function severityColor(row) {
-    if (row.silenced) return root.dim
-    if (row.severity === "critical") return Color.urgent
-    if (row.severity === "warning") return Color.accent
+    if (row.silenced)
+      return root.dim
+    if (row.severity === "critical")
+      return Color.urgent
+    if (row.severity === "warning")
+      return Color.accent
     return Color.muted
   }
 
   function heroMeta() {
-    if (!source) return ""
-    if (summary.total === 0) return summary.silenced > 0 ? "All quiet · " + summary.silenced + " silenced" : "All quiet"
+    if (!source)
+      return ""
+    if (summary.total === 0)
+      return summary.silenced > 0 ? "All quiet · " + summary.silenced + " silenced" : "All quiet"
     var parts = []
-    if (summary.critical) parts.push(summary.critical + " critical")
-    if (summary.warning) parts.push(summary.warning + " warning")
-    if (summary.info) parts.push(summary.info + " info")
-    if (summary.silenced) parts.push(summary.silenced + " silenced")
+    if (summary.critical)
+      parts.push(summary.critical + " critical")
+    if (summary.warning)
+      parts.push(summary.warning + " warning")
+    if (summary.info)
+      parts.push(summary.info + " info")
+    if (summary.silenced)
+      parts.push(summary.silenced + " silenced")
     return parts.join(" · ")
   }
 
   function statusLine() {
-    if (!source) return ""
-    if (source.error !== "") return source.error
+    if (!source)
+      return ""
+    if (source.error !== "")
+      return source.error
     var updated = source.updatedAt > 0 ? "Updated " + Alerts.duration(new Date(source.updatedAt).toISOString(), source.now) + " ago" : "Loading…"
     return source.demo ? updated + " · demo: create instances.json or set the Grafana URL in the widget settings" : updated
   }
 
-  onItemsChanged: if (!current) selected = Alerts.firstRow(items)
+  onItemsChanged: if (!current)
+                    selected = Alerts.firstRow(items)
   // `current` is rebuilt on every poll, so this also refreshes the sparkline once its cache runs out.
-  onCurrentChanged: if (opened && source) source.showSpark(current)
-  onOpenedChanged: if (opened && source) source.showSpark(current)
+  onCurrentChanged: if (opened && source)
+                      source.showSpark(current)
+  onOpenedChanged: if (opened && source)
+                     source.showSpark(current)
 
   function headerText(item) {
-    if (item.pending) return "Pending · " + item.count + (item.error !== "" ? " · could not load: " + item.error : "")
-    if (item.silences) return "Silences · " + item.count + (item.error !== "" ? " · could not load: " + item.error : "")
+    if (item.pending)
+      return "Pending · " + item.count + (item.error !== "" ? " · could not load: " + item.error : "")
+    if (item.silences)
+      return "Silences · " + item.count + (item.error !== "" ? " · could not load: " + item.error : "")
     var name = item.filter !== "" ? item.instance + " {" + item.filter + "}" : item.instance
-    if (item.error !== "") return name + " · unreachable: " + item.error
+    if (item.error !== "")
+      return name + " · unreachable: " + item.error
     return name + " · " + (item.count > 0 ? item.count + " firing" : "all quiet")
   }
 
@@ -88,19 +113,26 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      onMoveRequested: function(dx, dy) {
-        if (!root.current) return
+      onMoveRequested: function (dx, dy) {
+        if (!root.current)
+          return
         root.selected = Alerts.step(root.items, root.selected, dy)
         list.positionViewAtIndex(root.selected, ListView.Contain)
       }
-      onActivateRequested: if (root.current && !root.current.isSilence) root.source.openAlert(root.current)
+      onActivateRequested: if (root.current && !root.current.isSilence)
+                             root.source.openAlert(root.current)
       onCloseRequested: root.close()
-      onTabRequested: function(direction) { root.switchPanel(direction) }
-      onTextKey: function(text) {
+      onTabRequested: function (direction) {
+        root.switchPanel(direction)
+      }
+      onTextKey: function (text) {
         var key = text.toLowerCase()
-        if (text === "d") root.source.toggleDnd(60)
-        else if (text === "D") root.source.toggleDnd(0)
-        else if (key === "r") root.source.refresh()
+        if (text === "d")
+          root.source.toggleDnd(60)
+        else if (text === "D")
+          root.source.toggleDnd(0)
+        else if (key === "r")
+          root.source.refresh()
         else if (key === "s" && root.current && !root.current.isSilence && !root.current.isPending && !root.current.silenced)
           root.source.silence(root.current, 60)
         else if (key === "u" && root.current && root.current.isSilence)
@@ -186,7 +218,10 @@ Panel {
         }
 
         // On-call: only when an instance has OnCall on. Read-only, so it stays out of the keyboard-driven list.
-        PanelSeparator { visible: root.oncall.visible; width: parent.width }
+        PanelSeparator {
+          visible: root.oncall.visible
+          width: parent.width
+        }
 
         Column {
           visible: root.oncall.visible
@@ -260,7 +295,9 @@ Panel {
           }
         }
 
-        PanelSeparator { width: parent.width }
+        PanelSeparator {
+          width: parent.width
+        }
 
         Text {
           visible: root.rows.length === 0
@@ -319,10 +356,15 @@ Panel {
               width: parent ? parent.width : 0
               height: silenceColumn.implicitHeight + Style.space(12)
               radius: Style.space(6)
-              color: index === root.selected || silenceHover.hovered ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08) : "transparent"
+              color: index === root.selected || silenceHover.hovered ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08) :
+                                                                       "transparent"
 
-              HoverHandler { id: silenceHover }
-              TapHandler { onTapped: root.selected = silenceItem.index }
+              HoverHandler {
+                id: silenceHover
+              }
+              TapHandler {
+                onTapped: root.selected = silenceItem.index
+              }
 
               Column {
                 id: silenceColumn
@@ -347,8 +389,10 @@ Panel {
                 Text {
                   visible: text !== ""
                   width: parent.width
-                  text: [root.source && root.source.instances.length > 1 ? silenceItem.modelData.instance : "",
-                    silenceItem.modelData.createdBy, silenceItem.modelData.comment].filter(function(t) { return t !== "" }).join(" · ")
+                  text: [root.source && root.source.instances.length > 1 ? silenceItem.modelData.instance : "", silenceItem.modelData.createdBy,
+                    silenceItem.modelData.comment].filter(function (t) {
+                      return t !== ""
+                    }).join(" · ")
                   color: root.dim
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
@@ -396,9 +440,14 @@ Panel {
               color: isSelected || hover.hovered ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.08) : "transparent"
               opacity: modelData.silenced ? 0.55 : 1
 
-              HoverHandler { id: hover }
+              HoverHandler {
+                id: hover
+              }
               TapHandler {
-                onTapped: { root.selected = rowItem.index; root.source.openAlert(rowItem.modelData) }
+                onTapped: {
+                  root.selected = rowItem.index
+                  root.source.openAlert(rowItem.modelData)
+                }
               }
 
               Rectangle {
@@ -467,8 +516,8 @@ Panel {
                   Canvas {
                     id: sparkCanvas
                     readonly property real inset: 2
-                    readonly property var geometry: sparkBox.spark
-                      ? Alerts.sparkGeometry(sparkBox.spark.points, sparkBox.spark.thresholds, width, height - 2 * inset) : null
+                    readonly property var geometry: sparkBox.spark ? Alerts.sparkGeometry(sparkBox.spark.points, sparkBox.spark.thresholds, width,
+                                                                                          height - 2 * inset) : null
                     readonly property color lineColor: root.severityColor(rowItem.modelData)
                     readonly property color thresholdColor: root.foreground
                     width: parent.width
@@ -480,12 +529,14 @@ Panel {
                       var ctx = getContext("2d")
                       ctx.reset()
                       var g = geometry
-                      if (!g) return
+                      if (!g)
+                        return
                       ctx.translate(0, inset)
                       var line = g.line, last = line[line.length - 1]
                       ctx.beginPath()
                       ctx.moveTo(line[0].x, height)
-                      for (var i = 0; i < line.length; i++) ctx.lineTo(line[i].x, line[i].y)
+                      for (let i = 0; i < line.length; i++)
+                        ctx.lineTo(line[i].x, line[i].y)
                       ctx.lineTo(last.x, height)
                       ctx.closePath()
                       ctx.globalAlpha = 0.14
@@ -496,9 +547,12 @@ Panel {
                       ctx.strokeStyle = thresholdColor
                       ctx.lineWidth = 1
                       ctx.beginPath()
-                      for (var t = 0; t < g.thresholds.length; t++) {
-                        var y = Math.round(g.thresholds[t]) + 0.5
-                        for (var x = 0; x < width; x += 7) { ctx.moveTo(x, y); ctx.lineTo(Math.min(x + 4, width), y) }
+                      for (let t = 0; t < g.thresholds.length; t++) {
+                        const y = Math.round(g.thresholds[t]) + 0.5
+                        for (let x = 0; x < width; x += 7) {
+                          ctx.moveTo(x, y)
+                          ctx.lineTo(Math.min(x + 4, width), y)
+                        }
                       }
                       ctx.stroke()
                       ctx.globalAlpha = 1
@@ -506,7 +560,8 @@ Panel {
                       ctx.lineWidth = 1.5
                       ctx.lineJoin = "round"
                       ctx.beginPath()
-                      for (var j = 0; j < line.length; j++) j === 0 ? ctx.moveTo(line[j].x, line[j].y) : ctx.lineTo(line[j].x, line[j].y)
+                      for (let j = 0; j < line.length; j++)
+                        j === 0 ? ctx.moveTo(line[j].x, line[j].y) : ctx.lineTo(line[j].x, line[j].y)
                       ctx.stroke()
                       ctx.fillStyle = lineColor
                       ctx.beginPath()

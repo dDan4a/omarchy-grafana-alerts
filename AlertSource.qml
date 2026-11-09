@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -26,17 +28,20 @@ Item {
   property var known: ({})
   readonly property var rows: {
     var all = []
-    for (var i = 0; i < instances.length; i++) all = all.concat(rowsByInstance[instances[i].name] || [])
+    for (let i = 0; i < instances.length; i++)
+      all = all.concat(rowsByInstance[instances[i].name] || [])
     return all
   }
   readonly property var summary: Alerts.summarize(rows)
   // One line for the bar tooltip and the panel status: what is broken, if anything.
   readonly property string error: {
-    if (configError !== "") return configError
+    if (configError !== "")
+      return configError
     var parts = []
-    for (var i = 0; i < instances.length; i++) {
-      var e = errors[instances[i].name]
-      if (e) parts.push(instances.length > 1 ? instances[i].name + ": " + e : e)
+    for (let i = 0; i < instances.length; i++) {
+      const e = errors[instances[i].name]
+      if (e)
+        parts.push(instances.length > 1 ? instances[i].name + ": " + e : e)
     }
     return parts.join("; ")
   }
@@ -58,12 +63,16 @@ Item {
   // Pending alerts likewise, only from Grafana instances: they never count in the badge and never notify.
   property var pendingByInstance: ({})
   property var pendingErrors: ({})
-  readonly property var grafanaInstances: configured.filter(function(i) { return i.type === "grafana" })
+  readonly property var grafanaInstances: configured.filter(function (i) {
+    return i.type === "grafana"
+  })
 
   // OnCall schedules of Grafana instances with "oncall" on; a failure only marks the On-call section.
   property var oncallByInstance: ({})
   property var oncallErrors: ({})
-  readonly property var oncallInstances: configured.filter(function(i) { return !!i.oncall })
+  readonly property var oncallInstances: configured.filter(function (i) {
+    return !!i.oncall
+  })
   readonly property var oncall: Alerts.oncallView(instances, oncallByInstance, oncallErrors, now)
   readonly property var oncallRange: Alerts.oncallRange(now)
 
@@ -78,12 +87,11 @@ Item {
   // (`--data-binary @/dev/fd/3`). An empty token file sends no Authorization header: a plain Alertmanager often has none.
   // A URL with a quote, backslash or newline is refused: it could break out of its config line. The remaining
   // arguments are curl flags.
-  readonly property string curlScript:
-    'set -e; f=$1; shift; u=${GA_URL:?no URL}; ' +
-    'case $u in *[\\"\\\\]*|*"\n"*) echo "bad URL: quote, backslash or newline" >&2; exit 2;; esac; ' +
-    't=""; if [ -n "$f" ]; then t=$(cat "$f"); fi; ' +
-    '{ if [ -n "$t" ]; then printf \'header = "Authorization: Bearer %s"\\n\' "$t"; fi; printf \'url = "%s"\\n\' "$u"; } | ' +
-    'curl -sS --fail-with-body --max-time 10 -K - "$@" 3<<GA_BODY_END\n${GA_BODY:-}\nGA_BODY_END\n'
+  readonly property string curlScript: 'set -e; f=$1; shift; u=${GA_URL:?no URL}; '
+                                       + 'case $u in *[\\"\\\\]*|*"\n"*) echo "bad URL: quote, backslash or newline" >&2; exit 2;; esac; '
+                                       + 't=""; if [ -n "$f" ]; then t=$(cat "$f"); fi; '
+                                       + '{ if [ -n "$t" ]; then printf \'header = "Authorization: Bearer %s"\\n\' "$t"; fi; printf \'url = "%s"\\n\' "$u"; } | '
+                                       + 'curl -sS --fail-with-body --max-time 10 -K - "$@" 3<<GA_BODY_END\n${GA_BODY:-}\nGA_BODY_END\n'
 
   // OnCall API with the instance's service account token (Bearer + X-Grafana-URL). Its URL comes from the IRM
   // (or OSS OnCall) plugin settings unless $3 sets it. Prints { schedules, shifts: [{ id, shifts }] } with the final
@@ -91,31 +99,36 @@ Item {
   // Like curlScript, nothing goes into argv: URLs and headers are in curl's stdin config, responses only travel through
   // pipes (printf is a builtin). Schedules carry private iCal URLs: only their id and name are kept.
   // ponytail: first page only (100 schedules, 100 shifts each); follow `next` if that is ever too few.
-  readonly property string oncallScript:
-    'set -e; command -v jq >/dev/null || { echo "needs jq" >&2; exit 127; }; ' +
-    'v() { case $1 in *[\\"\\\\]*|*"\n"*) echo "bad URL: quote, backslash or newline" >&2; exit 2;; esac; }; ' +
-    't=$(cat "$1"); g=$2; api=$3; v "$g"; ' +
-    'c() { v "$1"; printf \'header = "Authorization: Bearer %s"\\nheader = "X-Grafana-URL: %s"\\nurl = "%s"\\n\' "$t" "$g" "$1" | ' +
-    'curl -sS --fail-with-body --max-time 10 -K -; }; ' +
-    'if [ -z "$api" ]; then for p in grafana-irm-app grafana-oncall-app; do ' +
-    'api=$(c "$g/api/plugins/$p/settings" 2>/dev/null | jq -r ".jsonData.onCallApiUrl // empty" 2>/dev/null) || api=""; ' +
-    '[ -n "$api" ] && break; done; fi; ' +
-    '[ -n "$api" ] || { echo "OnCall API URL not found: is Grafana IRM / OnCall enabled?" >&2; exit 1; }; ' +
-    'api=${api%/}; s=$(c "$api/api/v1/schedules/?perpage=100"); out=""; ' +
-    'for id in $(printf "%s" "$s" | jq -r ".results[].id"); do ' +
-    'r=$(c "$api/api/v1/schedules/$id/final_shifts?start_date=$4&end_date=$5&perpage=100"); ' +
-    'out="$out$({ printf "%s\\n" "$id" | jq -R .; printf "%s" "$r"; } | jq -cs "{id: .[0], shifts: .[1].results}")"; done; ' +
-    '{ printf "%s" "$s" | jq -c "[.results[] | {id, name}]"; printf "%s" "$out"; } | jq -s "{schedules: .[0], shifts: .[1:]}"'
+  readonly property string oncallScript: 'set -e; command -v jq >/dev/null || { echo "needs jq" >&2; exit 127; }; '
+                                         + 'v() { case $1 in *[\\"\\\\]*|*"\n"*) echo "bad URL: quote, backslash or newline" >&2; exit 2;; esac; }; '
+                                         + 't=$(cat "$1"); g=$2; api=$3; v "$g"; '
+                                         + 'c() { v "$1"; printf \'header = "Authorization: Bearer %s"\\nheader = "X-Grafana-URL: %s"\\nurl = "%s"\\n\' "$t" "$g" "$1" | '
+                                         + 'curl -sS --fail-with-body --max-time 10 -K -; }; '
+                                         + 'if [ -z "$api" ]; then for p in grafana-irm-app grafana-oncall-app; do '
+                                         + 'api=$(c "$g/api/plugins/$p/settings" 2>/dev/null | jq -r ".jsonData.onCallApiUrl // empty" 2>/dev/null) || api=""; '
+                                         + '[ -n "$api" ] && break; done; fi; '
+                                         + '[ -n "$api" ] || { echo "OnCall API URL not found: is Grafana IRM / OnCall enabled?" >&2; exit 1; }; '
+                                         + 'api=${api%/}; s=$(c "$api/api/v1/schedules/?perpage=100"); out=""; '
+                                         + 'for id in $(printf "%s" "$s" | jq -r ".results[].id"); do '
+                                         + 'r=$(c "$api/api/v1/schedules/$id/final_shifts?start_date=$4&end_date=$5&perpage=100"); '
+                                         + 'out="$out$({ printf "%s\\n" "$id" | jq -R .; printf "%s" "$r"; } | jq -cs "{id: .[0], shifts: .[1].results}")"; done; '
+                                         + '{ printf "%s" "$s" | jq -c "[.results[] | {id, name}]"; printf "%s" "$out"; } | jq -s "{schedules: .[0], shifts: .[1:]}"'
 
-  function expandHome(p) { return String(p || "").replace(/^~(?=\/)/, Quickshell.env("HOME")) }
+  function expandHome(p) {
+    return String(p || "").replace(/^~(?=\/)/, Quickshell.env("HOME"))
+  }
   function instanceNamed(name) {
-    for (var i = 0; i < instances.length; i++) if (instances[i].name === name) return instances[i]
+    for (let i = 0; i < instances.length; i++)
+      if (instances[i].name === name)
+        return instances[i]
     return null
   }
 
   // Re-reading instances.json on every poll picks up a file created or edited after start;
   // the FileView handlers then poll the instances.
-  function refresh() { instancesView.reload() }
+  function refresh() {
+    instancesView.reload()
+  }
 
   function loadInstances(text) {
     var next = [], err = ""
@@ -144,39 +157,50 @@ Item {
 
   function poll() {
     if (demo) {
-      for (var i = 0; i < instances.length; i++) {
-        var raw = Alerts.demoAlerts(Date.now(), demoSilences, instances[i].name)
-        if (raw === null) fail(instances[i].name, "demo: connection refused", "")
-        else apply(instances[i].name, raw)
-        var name = instances[i].name
-        set("silencesByInstance", name, Alerts.normalizeSilences(demoSilences.filter(function(s) { return s.instance === name }), name))
-        if (instances[i].type === "grafana") set("pendingByInstance", name, Alerts.normalizePending(Alerts.demoPending(Date.now(), name), instances[i]))
-        if (instances[i].oncall) set("oncallByInstance", name, Alerts.normalizeOncall(Alerts.demoOncall(Date.now(), name)))
+      for (let i = 0; i < instances.length; i++) {
+        const raw = Alerts.demoAlerts(Date.now(), demoSilences, instances[i].name)
+        if (raw === null)
+          fail(instances[i].name, "demo: connection refused", "")
+        else
+          apply(instances[i].name, raw)
+        const name = instances[i].name
+        set("silencesByInstance", name, Alerts.normalizeSilences(demoSilences.filter(function (s) {
+          return s.instance === name
+        }), name))
+        if (instances[i].type === "grafana")
+          set("pendingByInstance", name, Alerts.normalizePending(Alerts.demoPending(Date.now(), name), instances[i]))
+        if (instances[i].oncall)
+          set("oncallByInstance", name, Alerts.normalizeOncall(Alerts.demoOncall(Date.now(), name)))
       }
       return
     }
-    for (var j = 0; j < fetchers.count; j++) {
-      var f = fetchers.objectAt(j)
-      if (f && !f.running) f.running = true
+    for (let j = 0; j < fetchers.count; j++) {
+      const f = fetchers.objectAt(j)
+      if (f && !f.running)
+        f.running = true
     }
-    for (var k = 0; k < silenceFetchers.count; k++) {
-      var sf = silenceFetchers.objectAt(k)
-      if (sf && !sf.running) sf.running = true
+    for (let k = 0; k < silenceFetchers.count; k++) {
+      const sf = silenceFetchers.objectAt(k)
+      if (sf && !sf.running)
+        sf.running = true
     }
-    for (var p = 0; p < pendingFetchers.count; p++) {
-      var pf = pendingFetchers.objectAt(p)
-      if (pf && !pf.running) pf.running = true
+    for (let p = 0; p < pendingFetchers.count; p++) {
+      const pf = pendingFetchers.objectAt(p)
+      if (pf && !pf.running)
+        pf.running = true
     }
-    for (var o = 0; o < oncallFetchers.count; o++) {
-      var of = oncallFetchers.objectAt(o)
-      if (of && !of.running) of.running = true
+    for (let o = 0; o < oncallFetchers.count; o++) {
+      const of = oncallFetchers.objectAt(o)
+      if (of && !of.running)
+        of.running = true
     }
   }
 
   function apply(name, raw) {
     var next = Alerts.normalize(raw, name)
     var fresh = Alerts.toNotify(next, known[name] === undefined ? null : known[name], notify, dndUntil, Date.now())
-    if (fresh.length > 0) notifyAlerts(fresh)
+    if (fresh.length > 0)
+      notifyAlerts(fresh)
     set("known", name, Alerts.fingerprints(next))
     set("rowsByInstance", name, next)
     set("errors", name, "")
@@ -205,51 +229,63 @@ Item {
   // Alert names and summaries stay out of notify-send's argv (readable by every local user via /proc): the
   // notification only counts, the panel shows the alerts.
   function notifyAlerts(rows) {
-    var critical = rows.filter(function(r) { return r.severity === "critical" }).length
+    var critical = rows.filter(function (r) {
+      return r.severity === "critical"
+    }).length
     var body = rows.length === 1 ? "1 new firing alert" : rows.length + " new firing alerts"
-    if (critical > 0) body += " (" + critical + " critical)"
-    Quickshell.execDetached(["notify-send", "--app-name=Grafana Alerts",
-      "-u", critical > 0 ? "critical" : "normal", "--", "Grafana Alerts", body])
+    if (critical > 0)
+      body += " (" + critical + " critical)"
+    Quickshell.execDetached(["notify-send", "--app-name=Grafana Alerts", "-u", critical > 0 ? "critical" : "normal", "--", "Grafana Alerts", body])
   }
 
   function openAlert(row) {
     // generatorURL comes from the server: open web links only, never file:// or app schemes.
-    if (/^https?:\/\//i.test(row.url)) Qt.openUrlExternally(row.url)
+    if (/^https?:\/\//i.test(row.url))
+      Qt.openUrlExternally(row.url)
   }
 
   function silence(row, minutes) {
     if (demo) {
-      var body = Alerts.silenceBody(row, minutes, Date.now(), Quickshell.env("USER"))
+      const body = Alerts.silenceBody(row, minutes, Date.now(), Quickshell.env("USER"))
       body.instance = row.instance
       body.id = "demo-" + Date.now()
-      body.status = { state: "active" }
+      body.status = {
+        state: "active"
+      }
       demoSilences = demoSilences.concat([body])
       poll()
       return
     }
     var inst = instanceNamed(row.instance)
-    if (!inst || silenceProcess.running) return
+    if (!inst || silenceProcess.running)
+      return
     silenceProcess.instance = inst.name
-    silenceProcess.command = ["sh", "-c", curlScript, "sh", expandHome(inst.tokenFile),
-      "-H", "Content-Type: application/json",
-      "--data-binary", "@/dev/fd/3"]
-    silenceProcess.environment = { GA_URL: Alerts.apiBase(inst) + "/silences", GA_BODY: JSON.stringify(Alerts.silenceBody(row, minutes, Date.now(), Quickshell.env("USER"))) }
+    silenceProcess.command = ["sh", "-c", curlScript, "sh", expandHome(inst.tokenFile), "-H", "Content-Type: application/json", "--data-binary",
+                              "@/dev/fd/3"]
+    silenceProcess.environment = {
+      GA_URL: Alerts.apiBase(inst) + "/silences",
+      GA_BODY: JSON.stringify(Alerts.silenceBody(row, minutes, Date.now(), Quickshell.env("USER")))
+    }
     silenceProcess.running = true
   }
 
   // Ends a silence early (DELETE <prefix>/silence/{id}) on its own instance, then reloads alerts and silences.
   function expire(silence) {
     if (demo) {
-      demoSilences = demoSilences.filter(function(s) { return !(s.instance === silence.instance && s.id === silence.id) })
+      demoSilences = demoSilences.filter(function (s) {
+        return !(s.instance === silence.instance && s.id === silence.id)
+      })
       poll()
       return
     }
     var inst = instanceNamed(silence.instance)
-    if (!inst || expireProcess.running) return
+    if (!inst || expireProcess.running)
+      return
     expireProcess.instance = inst.name
-    expireProcess.command = ["sh", "-c", curlScript, "sh", expandHome(inst.tokenFile),
-      "-X", "DELETE"]
-    expireProcess.environment = { GA_URL: Alerts.expireUrl(inst, silence.id) }
+    expireProcess.command = ["sh", "-c", curlScript, "sh", expandHome(inst.tokenFile), "-X", "DELETE"]
+    expireProcess.environment = {
+      GA_URL: Alerts.expireUrl(inst, silence.id)
+    }
     expireProcess.running = true
   }
 
@@ -257,8 +293,12 @@ Item {
   function showSpark(row) {
     var inst = row && !row.header && !row.isSilence ? instanceNamed(row.instance) : null
     var uid = Alerts.ruleUid(row, inst)
-    if (uid === "" || Date.now() - (sparkLoadedAt[row.key] || 0) < Math.max(15, intervalSec) * 900) return
-    if (ruleProcess.running || sparkQueryProcess.running) { sparkQueued = row; return }
+    if (uid === "" || Date.now() - (sparkLoadedAt[row.key] || 0) < Math.max(15, intervalSec) * 900)
+      return
+    if (ruleProcess.running || sparkQueryProcess.running) {
+      sparkQueued = row
+      return
+    }
     sparkLoadedAt[row.key] = Date.now()
     if (demo) {
       set("sparks", row.key, Alerts.demoSpark(row, Date.now()))
@@ -266,24 +306,28 @@ Item {
     }
     ruleProcess.row = row
     ruleProcess.command = ["sh", "-c", curlScript, "sh", expandHome(inst.tokenFile)]
-    ruleProcess.environment = { GA_URL: Alerts.ruleUrl(inst, uid) }
+    ruleProcess.environment = {
+      GA_URL: Alerts.ruleUrl(inst, uid)
+    }
     ruleProcess.running = true
   }
 
   function sparkDone(row, spark) {
-    if (spark) set("sparks", row.key, spark)
+    if (spark)
+      set("sparks", row.key, spark)
     var next = sparkQueued
     sparkQueued = null
     // Later, so the process that just exited no longer counts as running.
-    if (next) Qt.callLater(showSpark, next)
+    if (next)
+      Qt.callLater(showSpark, next)
   }
 
   // minutes 0 = until turned off; any call while DND is on turns it off.
   function toggleDnd(minutes) {
     now = Date.now()
     dndUntil = Alerts.dndToggle(dndUntil, now, minutes)
-    dndWriter.command = ["sh", "-c", 'umask 077; mkdir -p "$1" && printf "%s\\n" "$2" > "$1/dnd.tmp" && mv "$1/dnd.tmp" "$1/dnd"',
-      "sh", stateDir, String(dndUntil)]
+    dndWriter.command = ["sh", "-c", 'umask 077; mkdir -p "$1" && printf "%s\\n" "$2" > "$1/dnd.tmp" && mv "$1/dnd.tmp" "$1/dnd"', "sh", stateDir,
+                         String(dndUntil)]
     dndWriter.running = true
   }
 
@@ -306,12 +350,18 @@ Item {
     onLoaded: root.dndUntil = Alerts.parseDnd(text())
   }
 
-  Process { id: dndWriter }
+  Process {
+    id: dndWriter
+  }
 
   IpcHandler {
     target: "dan4a.grafana-alerts"
-    function refresh(): void { root.refresh() }
-    function dnd(minutes: int): void { root.toggleDnd(minutes) }
+    function refresh(): void {
+      root.refresh()
+    }
+    function dnd(minutes: int): void {
+      root.toggleDnd(minutes)
+    }
   }
 
   Timer {
@@ -330,18 +380,30 @@ Item {
   }
 
   // One fetch process per configured instance, so a slow or dead instance does not hold up the others.
+  // qmllint disable required
   Instantiator {
     id: fetchers
     model: root.configured
     delegate: Process {
       required property var modelData
       command: ["sh", "-c", root.curlScript, "sh", root.expandHome(modelData.tokenFile)]
-      environment: ({ GA_URL: Alerts.alertsUrl(modelData) })
-      stdout: StdioCollector { id: fetchOut; waitForEnd: true }
-      stderr: StdioCollector { id: fetchErr; waitForEnd: true }
-      onExited: function(exitCode) {
+      environment: ({
+                      GA_URL: Alerts.alertsUrl(modelData) // qmllint disable incompatible-type
+                    })
+      stdout: StdioCollector {
+        id: fetchOut
+        waitForEnd: true
+      }
+      stderr: StdioCollector {
+        id: fetchErr
+        waitForEnd: true
+      }
+      onExited: function (exitCode) {
         var out = String(fetchOut.text || "")
-        if (exitCode !== 0) { root.fail(modelData.name, out, String(fetchErr.text || "")); return }
+        if (exitCode !== 0) {
+          root.fail(modelData.name, out, String(fetchErr.text || ""))
+          return
+        }
         try {
           root.apply(modelData.name, JSON.parse(out))
         } catch (e) {
@@ -357,15 +419,28 @@ Item {
     delegate: Process {
       required property var modelData
       command: ["sh", "-c", root.curlScript, "sh", root.expandHome(modelData.tokenFile)]
-      environment: ({ GA_URL: Alerts.silencesUrl(modelData) })
-      stdout: StdioCollector { id: silencesOut; waitForEnd: true }
-      stderr: StdioCollector { id: silencesErr; waitForEnd: true }
-      onExited: function(exitCode) {
+      environment: ({
+                      GA_URL: Alerts.silencesUrl(modelData) // qmllint disable incompatible-type
+                    })
+      stdout: StdioCollector {
+        id: silencesOut
+        waitForEnd: true
+      }
+      stderr: StdioCollector {
+        id: silencesErr
+        waitForEnd: true
+      }
+      onExited: function (exitCode) {
         var out = String(silencesOut.text || "")
         var list = null, err = ""
-        if (exitCode !== 0) err = root.errorText(out, String(silencesErr.text || ""))
+        if (exitCode !== 0)
+          err = root.errorText(out, String(silencesErr.text || ""))
         else {
-          try { list = JSON.parse(out) } catch (e) { err = "unexpected response: " + out.slice(0, 80) }
+          try {
+            list = JSON.parse(out)
+          } catch (e) {
+            err = "unexpected response: " + out.slice(0, 80)
+          }
         }
         root.set("silencesByInstance", modelData.name, Alerts.normalizeSilences(list, modelData.name))
         root.set("silenceErrors", modelData.name, err)
@@ -379,15 +454,28 @@ Item {
     delegate: Process {
       required property var modelData
       command: ["sh", "-c", root.curlScript, "sh", root.expandHome(modelData.tokenFile)]
-      environment: ({ GA_URL: Alerts.rulesUrl(modelData) })
-      stdout: StdioCollector { id: pendingOut; waitForEnd: true }
-      stderr: StdioCollector { id: pendingErr; waitForEnd: true }
-      onExited: function(exitCode) {
+      environment: ({
+                      GA_URL: Alerts.rulesUrl(modelData) // qmllint disable incompatible-type
+                    })
+      stdout: StdioCollector {
+        id: pendingOut
+        waitForEnd: true
+      }
+      stderr: StdioCollector {
+        id: pendingErr
+        waitForEnd: true
+      }
+      onExited: function (exitCode) {
         var out = String(pendingOut.text || "")
         var raw = null, err = ""
-        if (exitCode !== 0) err = root.errorText(out, String(pendingErr.text || ""))
+        if (exitCode !== 0)
+          err = root.errorText(out, String(pendingErr.text || ""))
         else {
-          try { raw = JSON.parse(out) } catch (e) { err = "unexpected response: " + out.slice(0, 80) }
+          try {
+            raw = JSON.parse(out)
+          } catch (e) {
+            err = "unexpected response: " + out.slice(0, 80)
+          }
         }
         root.set("pendingByInstance", modelData.name, Alerts.normalizePending(raw, modelData))
         root.set("pendingErrors", modelData.name, err)
@@ -400,14 +488,23 @@ Item {
     model: root.oncallInstances
     delegate: Process {
       required property var modelData
-      command: ["sh", "-c", root.oncallScript, "sh", root.expandHome(modelData.tokenFile), modelData.url, modelData.oncall.url,
-        root.oncallRange.from, root.oncallRange.to]
-      stdout: StdioCollector { id: oncallOut; waitForEnd: true }
-      stderr: StdioCollector { id: oncallErr; waitForEnd: true }
+      command: ["sh", "-c", root.oncallScript, "sh", root.expandHome(modelData.tokenFile), modelData.url, modelData.oncall.url, root.oncallRange.from,
+        root.oncallRange.to]
+      stdout: StdioCollector {
+        id: oncallOut
+        waitForEnd: true
+      }
+      stderr: StdioCollector {
+        id: oncallErr
+        waitForEnd: true
+      }
       // A failed request keeps the last schedules, so a blip does not blank the section; the error is shown instead.
-      onExited: function(exitCode) {
+      onExited: function (exitCode) {
         var out = String(oncallOut.text || "")
-        if (exitCode !== 0) { root.set("oncallErrors", modelData.name, root.errorText(out, String(oncallErr.text || ""))); return }
+        if (exitCode !== 0) {
+          root.set("oncallErrors", modelData.name, root.errorText(out, String(oncallErr.text || "")))
+          return
+        }
         try {
           root.set("oncallByInstance", modelData.name, Alerts.normalizeOncall(JSON.parse(out)))
           root.set("oncallErrors", modelData.name, "")
@@ -417,21 +514,33 @@ Item {
       }
     }
   }
+  // qmllint enable required
 
   Process {
     id: ruleProcess
     property var row: null
-    stdout: StdioCollector { id: ruleOut; waitForEnd: true }
-    onExited: function(exitCode) {
+    stdout: StdioCollector {
+      id: ruleOut
+      waitForEnd: true
+    }
+    onExited: function (exitCode) {
       var q = null
-      try { q = exitCode === 0 ? Alerts.sparkQuery(JSON.parse(String(ruleOut.text || ""))) : null } catch (e) {}
+      try {
+        q = exitCode === 0 ? Alerts.sparkQuery(JSON.parse(String(ruleOut.text || ""))) : null
+      } catch (e) {}
       var inst = root.instanceNamed(row.instance)
-      if (!q || !inst) { root.sparkDone(row, null); return }
+      if (!q || !inst) {
+        root.sparkDone(row, null)
+        return
+      }
       sparkQueryProcess.row = row
       sparkQueryProcess.query = q
-      sparkQueryProcess.command = ["sh", "-c", root.curlScript, "sh", root.expandHome(inst.tokenFile),
-        "-H", "Content-Type: application/json", "--data-binary", "@/dev/fd/3"]
-      sparkQueryProcess.environment = { GA_URL: Alerts.dsQueryUrl(inst), GA_BODY: JSON.stringify(q.request) }
+      sparkQueryProcess.command = ["sh", "-c", root.curlScript, "sh", root.expandHome(inst.tokenFile), "-H", "Content-Type: application/json", "--data-binary",
+                                   "@/dev/fd/3"]
+      sparkQueryProcess.environment = {
+        GA_URL: Alerts.dsQueryUrl(inst),
+        GA_BODY: JSON.stringify(q.request)
+      }
       sparkQueryProcess.running = true
     }
   }
@@ -440,34 +549,58 @@ Item {
     id: sparkQueryProcess
     property var row: null
     property var query: null
-    stdout: StdioCollector { id: sparkOut; waitForEnd: true }
-    onExited: function(exitCode) {
+    stdout: StdioCollector {
+      id: sparkOut
+      waitForEnd: true
+    }
+    onExited: function (exitCode) {
       var points = null
-      try { points = exitCode === 0 ? Alerts.sparkSeries(JSON.parse(String(sparkOut.text || "")), query.refId, row.labels) : null } catch (e) {}
-      root.sparkDone(row, points ? { points: points, thresholds: query.thresholds } : null)
+      try {
+        points = exitCode === 0 ? Alerts.sparkSeries(JSON.parse(String(sparkOut.text || "")), query.refId, row.labels) : null
+      } catch (e) {}
+      root.sparkDone(row, points ? {
+                                     points: points,
+                                     thresholds: query.thresholds
+                                   } : null)
     }
   }
 
   Process {
     id: expireProcess
     property string instance: ""
-    stdout: StdioCollector { id: expireOut; waitForEnd: true }
-    stderr: StdioCollector { id: expireErr; waitForEnd: true }
-    onExited: function(exitCode) {
-      if (exitCode !== 0) root.set("silenceErrors", instance, "expire: " + root.errorText(String(expireOut.text || ""), String(expireErr.text || "")))
-      else root.poll()
+    stdout: StdioCollector {
+      id: expireOut
+      waitForEnd: true
+    }
+    stderr: StdioCollector {
+      id: expireErr
+      waitForEnd: true
+    }
+    onExited: function (exitCode) {
+      if (exitCode !== 0)
+        root.set("silenceErrors", instance, "expire: " + root.errorText(String(expireOut.text || ""), String(expireErr.text || "")))
+      else
+        root.poll()
     }
   }
 
   Process {
     id: silenceProcess
     property string instance: ""
-    stdout: StdioCollector { id: silenceOut; waitForEnd: true }
-    stderr: StdioCollector { id: silenceErr; waitForEnd: true }
+    stdout: StdioCollector {
+      id: silenceOut
+      waitForEnd: true
+    }
+    stderr: StdioCollector {
+      id: silenceErr
+      waitForEnd: true
+    }
     // A failed silence keeps the rows and shows the error until the next poll.
-    onExited: function(exitCode) {
-      if (exitCode !== 0) root.set("errors", instance, "silence: " + root.errorText(String(silenceOut.text || ""), String(silenceErr.text || "")))
-      else root.poll()
+    onExited: function (exitCode) {
+      if (exitCode !== 0)
+        root.set("errors", instance, "silence: " + root.errorText(String(silenceOut.text || ""), String(silenceErr.text || "")))
+      else
+        root.poll()
     }
   }
 }
