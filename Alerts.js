@@ -34,10 +34,18 @@ function parseMatcher(text) {
   if (!m) throw new Error("bad matcher " + JSON.stringify(text) + ", expected label=value, !=, =~ or !~")
   var value = m[3]
   if (value.length >= 2 && value[0] === '"' && value[value.length - 1] === '"') {
-    try { value = JSON.parse(value) } catch (e) { throw new Error("bad quoting in matcher " + text) }
+    try {
+      value = JSON.parse(value)
+    } catch (e) {
+      throw new Error("bad quoting in matcher " + text)
+    }
   }
   if (m[2] === "=~" || m[2] === "!~") {
-    try { new RegExp(value) } catch (e) { throw new Error("bad regex in matcher " + text) }
+    try {
+      new RegExp(value)
+    } catch (e) {
+      throw new Error("bad regex in matcher " + text)
+    }
   }
   return { name: m[1], op: m[2], value: value }
 }
@@ -69,12 +77,15 @@ function parseInstances(text, legacyUrl, legacyTokenFile) {
   }
   var list = JSON.parse(text)
   if (!Array.isArray(list)) throw new Error("expected a JSON array of instances")
-  var out = [], seen = {}
+  var out = [],
+    seen = {}
   for (var i = 0; i < list.length; i++) {
     var e = list[i] || {}
     var name = String(e.name || "").trim()
     var type = String(e.type || "grafana")
-    var base = String(e.url || "").trim().replace(/\/+$/, "")
+    var base = String(e.url || "")
+      .trim()
+      .replace(/\/+$/, "")
     if (name === "" || base === "") throw new Error("instance " + (i + 1) + " needs a name and a url")
     if (type !== "grafana" && type !== "alertmanager") throw new Error(name + ": type must be grafana or alertmanager")
     if (seen[name]) throw new Error("duplicate instance name " + name)
@@ -86,7 +97,14 @@ function parseInstances(text, legacyUrl, legacyTokenFile) {
     } catch (err) {
       throw new Error(name + ": " + err.message)
     }
-    out.push({ name: name, type: type, url: base, tokenFile: String(e.tokenFile || ""), matchers: matchers, oncall: parseOncall(e.oncall, name, type) })
+    out.push({
+      name: name,
+      type: type,
+      url: base,
+      tokenFile: String(e.tokenFile || ""),
+      matchers: matchers,
+      oncall: parseOncall(e.oncall, name, type),
+    })
   }
   return out
 }
@@ -98,7 +116,12 @@ function parseOncall(value, name, type) {
   if (type !== "grafana") throw new Error(name + ": oncall needs a grafana instance")
   if (value !== true && (typeof value !== "object" || Array.isArray(value))) throw new Error(name + ": oncall must be true or an object")
   var o = value === true ? {} : value
-  return { user: String(o.user || "").trim(), url: String(o.url || "").trim().replace(/\/+$/, "") }
+  return {
+    user: String(o.user || "").trim(),
+    url: String(o.url || "")
+      .trim()
+      .replace(/\/+$/, ""),
+  }
 }
 
 function apiBase(instance) {
@@ -135,13 +158,13 @@ function normalize(raw, instance) {
       labelText: displayLabels(labels).join("  "),
       startsAt: String(a.startsAt || ""),
       url: String(a.generatorURL || ""),
-      silenced: state === "suppressed"
+      silenced: state === "suppressed",
     })
   }
-  rows.sort(function(x, y) {
+  rows.sort((x, y) => {
     if (x.silenced !== y.silenced) return x.silenced ? 1 : -1
     var r = SEVERITY_RANK[x.severity] - SEVERITY_RANK[y.severity]
-    return r !== 0 ? r : (x.startsAt < y.startsAt ? -1 : x.startsAt > y.startsAt ? 1 : 0)
+    return r !== 0 ? r : x.startsAt < y.startsAt ? -1 : x.startsAt > y.startsAt ? 1 : 0
   })
   return rows
 }
@@ -150,7 +173,10 @@ function normalize(raw, instance) {
 function summarize(rows) {
   var s = { critical: 0, warning: 0, info: 0, silenced: 0, total: 0 }
   for (var i = 0; i < rows.length; i++) {
-    if (rows[i].silenced) { s.silenced++; continue }
+    if (rows[i].silenced) {
+      s.silenced++
+      continue
+    }
     s[rows[i].severity]++
     s.total++
   }
@@ -161,7 +187,7 @@ function summarize(rows) {
 // so startup does not replay every already-firing alert as a notification.
 function newAlerts(rows, known) {
   if (known === null || known === undefined) return []
-  return rows.filter(function(r) { return !r.silenced && !known[r.key] })
+  return rows.filter((r) => !r.silenced && !known[r.key])
 }
 
 function fingerprints(rows) {
@@ -173,7 +199,9 @@ function fingerprints(rows) {
 // Do not disturb: `until` is 0 (off), DND_FOREVER (until turned off) or the end time in ms.
 var DND_FOREVER = -1
 
-function dndActive(until, nowMs) { return until === DND_FOREVER || until > nowMs }
+function dndActive(until, nowMs) {
+  return until === DND_FOREVER || until > nowMs
+}
 
 // Any press while active turns it off; otherwise on for `minutes`, or until turned off when minutes is 0.
 function dndToggle(until, nowMs, minutes) {
@@ -233,18 +261,19 @@ function normalizePending(raw, instance) {
           startsAt: String(a.activeAt || "").replace(/(\.\d{3})\d+/, "$1"),
           url: rule.uid ? instance.url + "/alerting/grafana/" + rule.uid + "/view" : "",
           ruleUid: String(rule.uid || ""),
-          silenced: false
+          silenced: false,
         })
       }
     }
   }
-  rows.sort(function(x, y) { return x.startsAt < y.startsAt ? -1 : x.startsAt > y.startsAt ? 1 : 0 })
+  rows.sort((x, y) => (x.startsAt < y.startsAt ? -1 : x.startsAt > y.startsAt ? 1 : 0))
   return rows
 }
 
 // Rows of every instance for one trailing panel section plus the instances whose request failed.
 function section(instances, byInstance, errorsByInstance) {
-  var list = [], failed = []
+  var list = [],
+    failed = []
   for (var i = 0; i < instances.length; i++) {
     var n = instances[i].name
     list = list.concat((byInstance || {})[n] || [])
@@ -264,8 +293,14 @@ function panelItems(instances, rowsByInstance, errors, silencesByInstance, silen
     var name = instances[i].name
     var rows = rowsByInstance[name] || []
     if (instances.length > 1)
-      items.push({ header: true, key: "#" + name, instance: name, error: errors[name] || "", count: summarize(rows).total,
-        filter: (instances[i].matchers || []).map(matcherText).join(", ") })
+      items.push({
+        header: true,
+        key: "#" + name,
+        instance: name,
+        error: errors[name] || "",
+        count: summarize(rows).total,
+        filter: (instances[i].matchers || []).map(matcherText).join(", "),
+      })
     items = items.concat(rows)
   }
   var pending = section(instances, pendingByInstance, pendingErrors)
@@ -310,13 +345,17 @@ function remaining(endsAt, nowMs) {
   return isFinite(end) ? duration(new Date(nowMs).toISOString(), end) : ""
 }
 
-function silencesUrl(instance) { return apiBase(instance) + "/silences" }
-function expireUrl(instance, id) { return apiBase(instance) + "/silence/" + encodeURIComponent(id) }
+function silencesUrl(instance) {
+  return apiBase(instance) + "/silences"
+}
+function expireUrl(instance, id) {
+  return apiBase(instance) + "/silence/" + encodeURIComponent(id)
+}
 
 // API matcher { name, value, isRegex, isEqual } in the same text form as the instance filters.
 function silenceMatcherText(m) {
   var eq = m.isEqual !== false
-  return matcherText({ name: String(m.name), op: m.isRegex ? (eq ? "=~" : "!~") : (eq ? "=" : "!="), value: String(m.value) })
+  return matcherText({ name: String(m.name), op: m.isRegex ? (eq ? "=~" : "!~") : eq ? "=" : "!=", value: String(m.value) })
 }
 
 // Active silences of one instance for the panel, the ones that end first on top.
@@ -335,10 +374,10 @@ function normalizeSilences(raw, instance) {
       matcherText: (s.matchers || []).map(silenceMatcherText).join(", "),
       createdBy: String(s.createdBy || ""),
       comment: String(s.comment || ""),
-      endsAt: String(s.endsAt || "")
+      endsAt: String(s.endsAt || ""),
     })
   }
-  out.sort(function(x, y) { return x.endsAt < y.endsAt ? -1 : x.endsAt > y.endsAt ? 1 : 0 })
+  out.sort((x, y) => (x.endsAt < y.endsAt ? -1 : x.endsAt > y.endsAt ? 1 : 0))
   return out
 }
 
@@ -353,7 +392,7 @@ function silenceBody(row, minutes, nowMs, author) {
     startsAt: new Date(nowMs).toISOString(),
     endsAt: new Date(nowMs + minutes * 60000).toISOString(),
     createdBy: author || "omarchy-grafana-alerts",
-    comment: "Silenced from the Omarchy bar"
+    comment: "Silenced from the Omarchy bar",
   }
 }
 
@@ -361,7 +400,9 @@ function silenceBody(row, minutes, nowMs, author) {
 var ONCALL_DAYS = 14
 
 function oncallRange(nowMs) {
-  function day(ms) { return new Date(ms).toISOString().slice(0, 10) }
+  function day(ms) {
+    return new Date(ms).toISOString().slice(0, 10)
+  }
   return { from: day(nowMs - 86400000), to: day(nowMs + ONCALL_DAYS * 86400000) }
 }
 
@@ -378,7 +419,7 @@ function normalizeOncall(raw) {
     var s = schedules[j] || {}
     out.push({ id: String(s.id), name: String(s.name || s.id), shifts: mergeShifts(byId[s.id] || []) })
   }
-  out.sort(function(x, y) { return x.name < y.name ? -1 : x.name > y.name ? 1 : 0 })
+  out.sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0))
   return out
 }
 
@@ -386,14 +427,16 @@ function mergeShifts(list) {
   var shifts = []
   for (var i = 0; i < list.length; i++) {
     var x = list[i] || {}
-    var start = Date.parse(x.shift_start), end = Date.parse(x.shift_end)
+    var start = Date.parse(x.shift_start),
+      end = Date.parse(x.shift_end)
     if (!isFinite(start) || !isFinite(end) || end <= start) continue
     shifts.push({ email: String(x.user_email || ""), username: String(x.user_username || ""), start: start, end: end })
   }
-  shifts.sort(function(a, b) { return a.start - b.start })
+  shifts.sort((a, b) => a.start - b.start)
   var out = []
   for (var k = 0; k < shifts.length; k++) {
-    var cur = shifts[k], merged = false
+    var cur = shifts[k],
+      merged = false
     for (var m = out.length - 1; m >= 0 && !merged; m--) {
       if (out[m].email === cur.email && out[m].username === cur.username && out[m].end >= cur.start) {
         out[m].end = Math.max(out[m].end, cur.end)
@@ -402,9 +445,7 @@ function mergeShifts(list) {
     }
     if (!merged) out.push(cur)
   }
-  return out.map(function(s) {
-    return { email: s.email, username: s.username, start: new Date(s.start).toISOString(), end: new Date(s.end).toISOString() }
-  })
+  return out.map((s) => ({ email: s.email, username: s.username, start: new Date(s.start).toISOString(), end: new Date(s.end).toISOString() }))
 }
 
 function isMe(shift, user) {
@@ -416,7 +457,8 @@ var WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
 // Local time; the weekday is added when it is not today.
 function clock(iso, nowMs) {
-  var d = new Date(Date.parse(iso)), n = new Date(nowMs)
+  var d = new Date(Date.parse(iso)),
+    n = new Date(nowMs)
   var hm = ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2)
   return d.toDateString() === n.toDateString() ? hm : WEEKDAYS[d.getDay()] + " " + hm
 }
@@ -426,28 +468,39 @@ function clock(iso, nowMs) {
 // shifts (not the current one) across all schedules, when the instance has a `user`. `onCall`: you are on call now.
 function oncallView(instances, byInstance, errors, nowMs) {
   var view = { visible: false, onCall: false, current: [], rows: [], next: [], hasUser: false }
-  var list = instances.filter(function(i) { return !!i.oncall })
+  var list = instances.filter((i) => !!i.oncall)
   if (list.length === 0) return view
   view.visible = true
-  var multi = list.length > 1, mine = []
+  var multi = list.length > 1,
+    mine = []
   for (var i = 0; i < list.length; i++) {
-    var inst = list[i], user = inst.oncall.user
+    var inst = list[i],
+      user = inst.oncall.user
     if (user !== "") view.hasUser = true
     var err = (errors || {})[inst.name]
-    if (err) { view.rows.push({ error: true, title: inst.name, text: "could not load: " + err }); continue }
+    if (err) {
+      view.rows.push({ error: true, title: inst.name, text: "could not load: " + err })
+      continue
+    }
     var schedules = (byInstance || {})[inst.name] || []
     for (var j = 0; j < schedules.length; j++) {
       var title = (multi ? inst.name + " / " : "") + schedules[j].name
       var shifts = schedules[j].shifts
-      var now = shifts.filter(function(s) { return Date.parse(s.start) <= nowMs && nowMs < Date.parse(s.end) })
-      var me = now.filter(function(s) { return isMe(s, user) })
-      var end = now.map(function(s) { return s.end }).sort()[0]
+      var now = shifts.filter((s) => Date.parse(s.start) <= nowMs && nowMs < Date.parse(s.end))
+      var me = now.filter((s) => isMe(s, user))
+      var end = now.map((s) => s.end).sort()[0]
       view.rows.push({
         title: title,
         me: me.length > 0,
-        text: now.length === 0 ? "nobody"
-          : now.map(function(s) { return isMe(s, user) ? "you" : s.username || s.email }).join(", ")
-            + " · until " + clock(end, nowMs) + " · " + remaining(end, nowMs) + " left"
+        text:
+          now.length === 0
+            ? "nobody"
+            : now.map((s) => (isMe(s, user) ? "you" : s.username || s.email)).join(", ") +
+              " · until " +
+              clock(end, nowMs) +
+              " · " +
+              remaining(end, nowMs) +
+              " left",
       })
       if (me.length > 0) {
         view.onCall = true
@@ -458,10 +511,10 @@ function oncallView(instances, byInstance, errors, nowMs) {
       }
     }
   }
-  mine.sort(function(x, y) { return x.start < y.start ? -1 : x.start > y.start ? 1 : 0 })
-  view.next = mine.slice(0, 2).map(function(s) {
-    return { title: s.title, text: clock(s.start, nowMs) + " – " + clock(s.end, nowMs) + " · in " + remaining(s.start, nowMs) }
-  })
+  mine.sort((x, y) => (x.start < y.start ? -1 : x.start > y.start ? 1 : 0))
+  view.next = mine
+    .slice(0, 2)
+    .map((s) => ({ title: s.title, text: clock(s.start, nowMs) + " – " + clock(s.end, nowMs) + " · in " + remaining(s.start, nowMs) }))
   return view
 }
 
@@ -476,10 +529,16 @@ function ruleUid(row, instance) {
   return String(row.ruleUid || (row.labels && row.labels.__alert_rule_uid__) || "")
 }
 
-function ruleUrl(instance, uid) { return instance.url + "/api/ruler/grafana/api/v1/rule/" + encodeURIComponent(uid) }
-function dsQueryUrl(instance) { return instance.url + "/api/ds/query" }
+function ruleUrl(instance, uid) {
+  return instance.url + "/api/ruler/grafana/api/v1/rule/" + encodeURIComponent(uid)
+}
+function dsQueryUrl(instance) {
+  return instance.url + "/api/ds/query"
+}
 
-function isExpression(q) { return q.datasourceUid === "__expr__" || q.datasourceUid === "-100" }
+function isExpression(q) {
+  return q.datasourceUid === "__expr__" || q.datasourceUid === "-100"
+}
 
 // One value for gt/lt, two for the range evaluators; anything else (no_value, missing params) gives none.
 function evaluatorValues(ev) {
@@ -494,10 +553,13 @@ function evaluatorValues(ev) {
 // the threshold comparable with the series; with math, resample or several classic conditions there is no threshold line.
 function sparkQuery(rule) {
   var a = (rule && rule.grafana_alert) || {}
-  var data = a.data || [], byRef = {}
+  var data = a.data || [],
+    byRef = {}
   for (var i = 0; i < data.length; i++) if (data[i]) byRef[data[i].refId] = data[i]
-  var ref = a.condition, thresholds = []
-  var cond = byRef[ref], m = (cond && cond.model) || {}
+  var ref = a.condition,
+    thresholds = []
+  var cond = byRef[ref],
+    m = (cond && cond.model) || {}
   if (cond && isExpression(cond) && m.type === "threshold") {
     thresholds = evaluatorValues(m.conditions && m.conditions[0] && m.conditions[0].evaluator)
     ref = m.expression
@@ -512,13 +574,21 @@ function sparkQuery(rule) {
   var q = byRef[ref]
   if (!q || isExpression(q)) {
     thresholds = []
-    q = data.filter(function(d) { return d && !isExpression(d) })[0]
+    q = data.filter((d) => d && !isExpression(d))[0]
   }
   if (!q) return null
-  var model = Object.assign({}, q.model, { refId: q.refId, datasource: { uid: q.datasourceUid }, hide: false,
-    intervalMs: SPARK_WINDOW_MS / SPARK_POINTS, maxDataPoints: SPARK_POINTS })
+  var model = Object.assign({}, q.model, {
+    refId: q.refId,
+    datasource: { uid: q.datasourceUid },
+    hide: false,
+    intervalMs: SPARK_WINDOW_MS / SPARK_POINTS,
+    maxDataPoints: SPARK_POINTS,
+  })
   // Alert queries are often instant (one point); a sparkline needs the range form.
-  if (model.instant) { model.instant = false; model.range = true }
+  if (model.instant) {
+    model.instant = false
+    model.range = true
+  }
   if (model.queryType === "instant") model.queryType = "range"
   return { refId: q.refId, thresholds: thresholds, request: { from: "now-1h", to: "now", queries: [model] } }
 }
@@ -528,21 +598,31 @@ function sparkQuery(rule) {
 function sparkSeries(resp, refId, labels) {
   var result = resp && resp.results && resp.results[refId]
   if (!result || result.error) return null
-  var first = null, best = null, bestScore = -1
+  var first = null,
+    best = null,
+    bestScore = -1
   var frames = result.frames || []
   for (var f = 0; f < frames.length; f++) {
     var fields = (frames[f] && frames[f].schema && frames[f].schema.fields) || []
     var values = (frames[f] && frames[f].data && frames[f].data.values) || []
     var ti = -1
-    for (var k = 0; k < fields.length; k++) if (fields[k].type === "time") { ti = k; break }
+    for (var k = 0; k < fields.length; k++)
+      if (fields[k].type === "time") {
+        ti = k
+        break
+      }
     if (ti < 0) continue
     for (var j = 0; j < fields.length; j++) {
       if (fields[j].type !== "number") continue
       var series = { times: values[ti] || [], vals: values[j] || [] }
       if (!first) first = series
-      var l = fields[j].labels || {}, score = 0
+      var l = fields[j].labels || {},
+        score = 0
       for (var key in l) score = score >= 0 && labels && String(labels[key]) === String(l[key]) ? score + 1 : -1
-      if (score > bestScore) { best = series; bestScore = score }
+      if (score > bestScore) {
+        best = series
+        bestScore = score
+      }
     }
   }
   var pick = best || first
@@ -552,27 +632,36 @@ function sparkSeries(resp, refId, labels) {
     var v = pick.vals[p]
     if (v !== null && v !== undefined && isFinite(v)) points.push({ t: Number(pick.times[p]), v: Number(v) })
   }
-  points.sort(function(x, y) { return x.t - y.t })
+  points.sort((x, y) => x.t - y.t)
   return points.length >= 2 ? points : null
 }
 
 // Pixel coordinates for a w x h box: the y range covers the values and the thresholds, so a crossing is always visible.
 function sparkGeometry(points, thresholds, w, h) {
-  var vals = points.map(function(p) { return p.v }).concat(thresholds)
-  var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals)
-  if (hi === lo) { lo -= Math.abs(lo) * 0.1 || 1; hi += Math.abs(hi) * 0.1 || 1 }
+  var vals = points.map((p) => p.v).concat(thresholds)
+  var lo = Math.min.apply(null, vals),
+    hi = Math.max.apply(null, vals)
+  if (hi === lo) {
+    lo -= Math.abs(lo) * 0.1 || 1
+    hi += Math.abs(hi) * 0.1 || 1
+  }
   var pad = (hi - lo) * 0.1
   lo -= pad
   hi += pad
-  var t0 = points[0].t, span = (points[points.length - 1].t - t0) || 1
-  function y(v) { return (hi - v) / (hi - lo) * h }
+  var t0 = points[0].t,
+    span = points[points.length - 1].t - t0 || 1
+  function y(v) {
+    return ((hi - v) / (hi - lo)) * h
+  }
   return {
-    line: points.map(function(p) { return { x: (p.t - t0) / span * w, y: y(p.v) } }),
-    thresholds: thresholds.map(y)
+    line: points.map((p) => ({ x: ((p.t - t0) / span) * w, y: y(p.v) })),
+    thresholds: thresholds.map(y),
   }
 }
 
-function formatValue(v) { return String(Number(Number(v).toPrecision(3))) }
+function formatValue(v) {
+  return String(Number(Number(v).toPrecision(3)))
+}
 
 // "last 1h · now 1.9 · threshold 1" under the sparkline.
 function sparkCaption(spark) {
@@ -582,25 +671,49 @@ function sparkCaption(spark) {
 }
 
 var DEMO_INSTANCES = [
-  { name: "prod", type: "grafana", url: "https://grafana.example.com", tokenFile: "", matchers: [],
-    oncall: { user: "you@example.com", url: "" } },
-  { name: "staging", type: "alertmanager", url: "https://alertmanager.staging.example.com", tokenFile: "",
-    matchers: [parseMatcher("queue=~emails|billing")], oncall: null }
+  { name: "prod", type: "grafana", url: "https://grafana.example.com", tokenFile: "", matchers: [], oncall: { user: "you@example.com", url: "" } },
+  {
+    name: "staging",
+    type: "alertmanager",
+    url: "https://alertmanager.staging.example.com",
+    tokenFile: "",
+    matchers: [parseMatcher("queue=~emails|billing")],
+    oncall: null,
+  },
 ]
 
 // Demo silences in the API shape plus an `instance` field: one per instance to start with; silencing and
 // expiring in demo mode add to and remove from this list. The prod one covers the TLS certificate alert.
 function demoSilences(nowMs) {
   function silence(instance, id, matchers, createdBy, comment, endsInMin) {
-    return { instance: instance, id: id, matchers: matchers, createdBy: createdBy, comment: comment,
-      startsAt: new Date(nowMs - 3600000).toISOString(), endsAt: new Date(nowMs + endsInMin * 60000).toISOString(),
-      status: { state: "active" } }
+    return {
+      instance: instance,
+      id: id,
+      matchers: matchers,
+      createdBy: createdBy,
+      comment: comment,
+      startsAt: new Date(nowMs - 3600000).toISOString(),
+      endsAt: new Date(nowMs + endsInMin * 60000).toISOString(),
+      status: { state: "active" },
+    }
   }
   return [
-    silence("prod", "demo-silence-cert", [{ name: "alertname", value: "TLS certificate expires soon", isRegex: false, isEqual: true }],
-      "alice", "Renewal is in OPS-112", 60 * 50),
-    silence("staging", "demo-silence-reports", [{ name: "queue", value: "reports|archive", isRegex: true, isEqual: true }],
-      "bob", "Queues are being migrated", 190)
+    silence(
+      "prod",
+      "demo-silence-cert",
+      [{ name: "alertname", value: "TLS certificate expires soon", isRegex: false, isEqual: true }],
+      "alice",
+      "Renewal is in OPS-112",
+      60 * 50,
+    ),
+    silence(
+      "staging",
+      "demo-silence-reports",
+      [{ name: "queue", value: "reports|archive", isRegex: true, isEqual: true }],
+      "bob",
+      "Queues are being migrated",
+      190,
+    ),
   ]
 }
 
@@ -609,25 +722,40 @@ function demoSilences(nowMs) {
 function demoPending(nowMs, instance) {
   if (instance !== "prod") return null
   var phase = Math.floor(nowMs / 120000) % 2 === 0
-  function ago(min) { return new Date(nowMs - min * 60000).toISOString() }
-  function rule(uid, name, alerts) { return { uid: uid, name: name, state: "pending", alerts: alerts } }
+  function ago(min) {
+    return new Date(nowMs - min * 60000).toISOString()
+  }
+  function rule(uid, name, alerts) {
+    return { uid: uid, name: name, state: "pending", alerts: alerts }
+  }
   function alert(labels, summary, state, activeMinAgo) {
     return { labels: labels, annotations: { summary: summary }, state: state, activeAt: ago(activeMinAgo) }
   }
   var rules = [
     rule("demo-replication", "Replication lag", [
-      alert({ alertname: "Replication lag", severity: "warning", instance: "db-02:9187" }, "Replica 38s behind (threshold 30s for 10m)", "Pending", 4)
+      alert(
+        { alertname: "Replication lag", severity: "warning", instance: "db-02:9187" },
+        "Replica 38s behind (threshold 30s for 10m)",
+        "Pending",
+        4,
+      ),
     ]),
     rule("demo-cpu", "CPU saturation", [
       alert({ alertname: "CPU saturation", severity: "warning", node: "k8s-worker-3" }, "CPU 93% (threshold 90% for 15m)", "Pending", 9),
-      alert({ alertname: "CPU saturation", severity: "warning", node: "k8s-worker-1" }, "CPU 41%", "Normal", 0)
-    ])
+      alert({ alertname: "CPU saturation", severity: "warning", node: "k8s-worker-1" }, "CPU 41%", "Normal", 0),
+    ]),
   ]
   if (!phase) {
-    rules.push(rule("demo-latency", "Payment latency p99", [
-      alert({ alertname: "Payment latency p99", severity: "critical", service: "payments", env: "prod" },
-        "p99 1.4s (threshold 1s for 2m)", "Pending", (nowMs % 120000) / 60000)
-    ]))
+    rules.push(
+      rule("demo-latency", "Payment latency p99", [
+        alert(
+          { alertname: "Payment latency p99", severity: "critical", service: "payments", env: "prod" },
+          "p99 1.4s (threshold 1s for 2m)",
+          "Pending",
+          (nowMs % 120000) / 60000,
+        ),
+      ]),
+    )
   }
   return { status: "success", data: { groups: [{ name: "demo", file: "Demo", rules: rules }] } }
 }
@@ -636,17 +764,26 @@ function demoPending(nowMs, instance) {
 // "until" counts down: you are on call in Primary now, your next shifts are in Secondary and Primary again.
 function demoOncall(nowMs, instance) {
   if (instance !== "prod") return null
-  var H = 3600000, base = Math.floor(nowMs / (8 * H)) * 8 * H
+  var H = 3600000,
+    base = Math.floor(nowMs / (8 * H)) * 8 * H
   function shift(who, fromH, toH) {
-    return { user_pk: "U" + who, user_email: who + "@example.com", user_username: who,
-      shift_start: new Date(base + fromH * H).toISOString(), shift_end: new Date(base + toH * H).toISOString() }
+    return {
+      user_pk: "U" + who,
+      user_email: who + "@example.com",
+      user_username: who,
+      shift_start: new Date(base + fromH * H).toISOString(),
+      shift_end: new Date(base + toH * H).toISOString(),
+    }
   }
   return {
-    schedules: [{ id: "SPRIMARY", name: "Primary" }, { id: "SSECONDARY", name: "Secondary" }],
+    schedules: [
+      { id: "SPRIMARY", name: "Primary" },
+      { id: "SSECONDARY", name: "Secondary" },
+    ],
     shifts: [
       { id: "SPRIMARY", shifts: [shift("you", -4, 0), shift("you", 0, 8), shift("bob", 8, 32), shift("you", 72, 80)] },
-      { id: "SSECONDARY", shifts: [shift("alice", -16, 12), shift("you", 12, 36)] }
-    ]
+      { id: "SSECONDARY", shifts: [shift("alice", -16, 12), shift("you", 12, 36)] },
+    ],
   }
 }
 
@@ -658,7 +795,7 @@ var DEMO_SPARKS = {
   "Payment latency p99": { from: 0.42, to: 1.9, threshold: 1 },
   "TLS certificate expires soon": { from: 9.04, to: 9, threshold: 14 },
   "Replication lag": { from: 6, to: 38, threshold: 30 },
-  "CPU saturation": { from: 58, to: 93, threshold: 90 }
+  "CPU saturation": { from: 58, to: 93, threshold: 90 },
 }
 
 function demoSpark(row, nowMs) {
@@ -666,9 +803,12 @@ function demoSpark(row, nowMs) {
   if (!d || row.instance !== "prod") return null
   var seed = 0
   for (var c = 0; c < row.key.length; c++) seed = (seed * 31 + row.key.charCodeAt(c)) % 1000
-  var step = SPARK_WINDOW_MS / SPARK_POINTS, end = Math.floor(nowMs / step) * step, points = []
+  var step = SPARK_WINDOW_MS / SPARK_POINTS,
+    end = Math.floor(nowMs / step) * step,
+    points = []
   for (var i = 0; i <= SPARK_POINTS; i++) {
-    var t = end - (SPARK_POINTS - i) * step, k = t / step
+    var t = end - (SPARK_POINTS - i) * step,
+      k = t / step
     var ramp = Math.min(1, Math.max(0, (i - SPARK_POINTS * 0.55) / (SPARK_POINTS * 0.35)))
     var noise = Math.sin(k * 0.9 + seed) * 0.6 + Math.sin(k * 0.23 + seed * 2) * 0.4
     points.push({ t: t, v: d.from + (d.to - d.from) * ramp * ramp * (3 - 2 * ramp) + noise * Math.abs(d.to - d.from) * 0.06 })
@@ -683,42 +823,75 @@ function demoSpark(row, nowMs) {
 // The instance's matchers are applied here, as the server would: staging's filter drops "reports".
 function demoAlerts(nowMs, silences, instance) {
   var phase = Math.floor(nowMs / 120000) % 2 === 0
-  function ago(min) { return new Date(nowMs - min * 60000).toISOString() }
+  function ago(min) {
+    return new Date(nowMs - min * 60000).toISOString()
+  }
   function alert(fp, labels, annotations, startedMinAgo) {
     if (instance === "prod") labels.__alert_rule_uid__ = fp
-    var silenced = (silences || []).some(function(s) {
-      return s.instance === instance && matchesAll(labels, s.matchers.map(function(m) { return parseMatcher(silenceMatcherText(m)) }))
-    })
+    var silenced = (silences || []).some(
+      (s) =>
+        s.instance === instance &&
+        matchesAll(
+          labels,
+          s.matchers.map((m) => parseMatcher(silenceMatcherText(m))),
+        ),
+    )
     return {
       fingerprint: fp,
       labels: labels,
       annotations: annotations,
       startsAt: ago(startedMinAgo),
-      generatorURL: instance === "prod" ? "https://grafana.example.com/alerting/grafana/" + fp + "/view"
-        : "https://prometheus.staging.example.com/graph",
-      status: { state: silenced ? "suppressed" : "active" }
+      generatorURL:
+        instance === "prod" ? "https://grafana.example.com/alerting/grafana/" + fp + "/view" : "https://prometheus.staging.example.com/graph",
+      status: { state: silenced ? "suppressed" : "active" },
     }
   }
   if (instance === "staging") {
     if (phase) return null
     return [
-      alert("demo-queue", { alertname: "Queue backlog", severity: "warning", queue: "emails", env: "staging" },
-        { summary: "12k messages waiting for 20m" }, 20),
-      alert("demo-reports", { alertname: "Queue backlog", severity: "warning", queue: "reports", env: "staging" },
-        { summary: "Not ours, filtered out" }, 30)
-    ].filter(function(a) { return matchesAll(a.labels, DEMO_INSTANCES[1].matchers) })
+      alert(
+        "demo-queue",
+        { alertname: "Queue backlog", severity: "warning", queue: "emails", env: "staging" },
+        { summary: "12k messages waiting for 20m" },
+        20,
+      ),
+      alert(
+        "demo-reports",
+        { alertname: "Queue backlog", severity: "warning", queue: "reports", env: "staging" },
+        { summary: "Not ours, filtered out" },
+        30,
+      ),
+    ].filter((a) => matchesAll(a.labels, DEMO_INSTANCES[1].matchers))
   }
   var list = [
-    alert("demo-disk", { alertname: "Disk almost full", severity: "critical", instance: "db-01:9100", mountpoint: "/var/lib/postgresql" },
-      { summary: "Free space 4.2% on /var/lib/postgresql" }, 47),
-    alert("demo-5xx", { alertname: "HTTP 5xx rate", severity: "warning", service: "channel-service", env: "prod" },
-      { summary: "5xx ratio 2.8% over 5m (threshold 2%)" }, 12),
-    alert("demo-cert", { alertname: "TLS certificate expires soon", severity: "info", host: "api.example.com" },
-      { summary: "Certificate expires in 9 days" }, 60 * 26)
+    alert(
+      "demo-disk",
+      { alertname: "Disk almost full", severity: "critical", instance: "db-01:9100", mountpoint: "/var/lib/postgresql" },
+      { summary: "Free space 4.2% on /var/lib/postgresql" },
+      47,
+    ),
+    alert(
+      "demo-5xx",
+      { alertname: "HTTP 5xx rate", severity: "warning", service: "channel-service", env: "prod" },
+      { summary: "5xx ratio 2.8% over 5m (threshold 2%)" },
+      12,
+    ),
+    alert(
+      "demo-cert",
+      { alertname: "TLS certificate expires soon", severity: "info", host: "api.example.com" },
+      { summary: "Certificate expires in 9 days" },
+      60 * 26,
+    ),
   ]
   if (phase) {
-    list.push(alert("demo-latency", { alertname: "Payment latency p99", severity: "critical", service: "payments", env: "prod" },
-      { summary: "p99 1.9s over 5m (threshold 1s)" }, 1))
+    list.push(
+      alert(
+        "demo-latency",
+        { alertname: "Payment latency p99", severity: "critical", service: "payments", env: "prod" },
+        { summary: "p99 1.9s over 5m (threshold 1s)" },
+        1,
+      ),
+    )
   }
   return list
 }
