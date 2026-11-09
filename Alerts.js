@@ -6,7 +6,7 @@
 var SEVERITY_RANK = { critical: 0, warning: 1, info: 2 }
 
 function severityOf(labels) {
-  var s = String((labels && labels.severity) || "").toLowerCase()
+  var s = String(labels?.severity || "").toLowerCase()
   if (s === "critical" || s === "high" || s === "page" || s === "p1") return "critical"
   if (s === "warning" || s === "warn" || s === "medium" || s === "p2") return "warning"
   return "info"
@@ -18,7 +18,7 @@ var HIDDEN_LABELS = ["alertname", "severity", "grafana_folder", "__alert_rule_ui
 function displayLabels(labels) {
   var out = []
   for (var key in labels) {
-    if (HIDDEN_LABELS.indexOf(key) === -1) out.push(key + "=" + labels[key])
+    if (HIDDEN_LABELS.indexOf(key) === -1) out.push(`${key}=${labels[key]}`)
   }
   out.sort()
   return out
@@ -31,20 +31,20 @@ var MATCHER_RE = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(=~|!~|!=|=)\s*(.*?)\s*$/
 
 function parseMatcher(text) {
   var m = MATCHER_RE.exec(String(text))
-  if (!m) throw new Error("bad matcher " + JSON.stringify(text) + ", expected label=value, !=, =~ or !~")
+  if (!m) throw new Error(`bad matcher ${JSON.stringify(text)}, expected label=value, !=, =~ or !~`)
   var value = m[3]
   if (value.length >= 2 && value[0] === '"' && value[value.length - 1] === '"') {
     try {
       value = JSON.parse(value)
     } catch (e) {
-      throw new Error("bad quoting in matcher " + text)
+      throw new Error(`bad quoting in matcher ${text}`)
     }
   }
   if (m[2] === "=~" || m[2] === "!~") {
     try {
       new RegExp(value)
     } catch (e) {
-      throw new Error("bad regex in matcher " + text)
+      throw new Error(`bad regex in matcher ${text}`)
     }
   }
   return { name: m[1], op: m[2], value: value }
@@ -52,15 +52,15 @@ function parseMatcher(text) {
 
 // Canonical form with a quoted value, which every Alertmanager matcher parser accepts.
 function matcherText(m) {
-  return m.name + m.op + '"' + m.value.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"'
+  return `${m.name + m.op}"${m.value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
 }
 
 // Same semantics as Alertmanager: regexes are anchored, a missing label is "".
 function matchesAll(labels, matchers) {
   for (var i = 0; i < (matchers || []).length; i++) {
     var m = matchers[i]
-    var v = String((labels && labels[m.name]) || "")
-    var hit = m.op === "=" || m.op === "!=" ? v === m.value : new RegExp("^(?:" + m.value + ")$").test(v)
+    var v = String(labels?.[m.name] || "")
+    var hit = m.op === "=" || m.op === "!=" ? v === m.value : new RegExp(`^(?:${m.value})$`).test(v)
     if (hit !== (m.op === "=" || m.op === "=~")) return false
   }
   return true
@@ -86,16 +86,16 @@ function parseInstances(text, legacyUrl, legacyTokenFile) {
     var base = String(e.url || "")
       .trim()
       .replace(/\/+$/, "")
-    if (name === "" || base === "") throw new Error("instance " + (i + 1) + " needs a name and a url")
-    if (type !== "grafana" && type !== "alertmanager") throw new Error(name + ": type must be grafana or alertmanager")
-    if (seen[name]) throw new Error("duplicate instance name " + name)
+    if (name === "" || base === "") throw new Error(`instance ${i + 1} needs a name and a url`)
+    if (type !== "grafana" && type !== "alertmanager") throw new Error(`${name}: type must be grafana or alertmanager`)
+    if (seen[name]) throw new Error(`duplicate instance name ${name}`)
     seen[name] = true
-    if (e.matchers !== undefined && !Array.isArray(e.matchers)) throw new Error(name + ": matchers must be a list of strings")
+    if (e.matchers !== undefined && !Array.isArray(e.matchers)) throw new Error(`${name}: matchers must be a list of strings`)
     var matchers = []
     try {
       for (var k = 0; k < (e.matchers || []).length; k++) matchers.push(parseMatcher(e.matchers[k]))
     } catch (err) {
-      throw new Error(name + ": " + err.message)
+      throw new Error(`${name}: ${err.message}`)
     }
     out.push({
       name: name,
@@ -113,8 +113,8 @@ function parseInstances(text, legacyUrl, legacyTokenFile) {
 // `user` (email or username) picks out your own shifts, `url` overrides the OnCall API URL found in the plugin settings.
 function parseOncall(value, name, type) {
   if (value === undefined || value === null || value === false) return null
-  if (type !== "grafana") throw new Error(name + ": oncall needs a grafana instance")
-  if (value !== true && (typeof value !== "object" || Array.isArray(value))) throw new Error(name + ": oncall must be true or an object")
+  if (type !== "grafana") throw new Error(`${name}: oncall needs a grafana instance`)
+  if (value !== true && (typeof value !== "object" || Array.isArray(value))) throw new Error(`${name}: oncall must be true or an object`)
   var o = value === true ? {} : value
   return {
     user: String(o.user || "").trim(),
@@ -130,9 +130,9 @@ function apiBase(instance) {
 
 // GET URL for the active alerts of an instance; each matcher becomes its own filter= parameter.
 function alertsUrl(instance) {
-  var url = apiBase(instance) + "/alerts?active=true&inhibited=false"
+  var url = `${apiBase(instance)}/alerts?active=true&inhibited=false`
   var matchers = instance.matchers || []
-  for (var i = 0; i < matchers.length; i++) url += "&filter=" + encodeURIComponent(matcherText(matchers[i]))
+  for (var i = 0; i < matchers.length; i++) url += `&filter=${encodeURIComponent(matcherText(matchers[i]))}`
   return url
 }
 
@@ -145,11 +145,11 @@ function normalize(raw, instance) {
     var a = raw[i] || {}
     var labels = a.labels || {}
     var annotations = a.annotations || {}
-    var state = (a.status && a.status.state) || "active"
+    var state = a.status?.state || "active"
     var fingerprint = String(a.fingerprint || labels.alertname + JSON.stringify(labels))
     rows.push({
       instance: String(instance || ""),
-      key: String(instance || "") + "/" + fingerprint,
+      key: `${String(instance || "")}/${fingerprint}`,
       fingerprint: fingerprint,
       name: String(labels.alertname || "Unnamed alert"),
       severity: severityOf(labels),
@@ -211,7 +211,7 @@ function dndToggle(until, nowMs, minutes) {
 
 function dndText(until, nowMs) {
   if (!dndActive(until, nowMs)) return ""
-  return until === DND_FOREVER ? "until turned off" : duration(new Date(nowMs).toISOString(), until) + " left"
+  return until === DND_FOREVER ? "until turned off" : `${duration(new Date(nowMs).toISOString(), until)} left`
 }
 
 // The saved file holds just the number; anything else counts as off.
@@ -229,17 +229,17 @@ function toNotify(rows, known, notify, dndUntil, nowMs) {
 // Pending alerts come from Grafana's Prometheus-compatible rules API; Alertmanager knows nothing about them.
 // `state=` keeps rules with pending (or firing, which may also have pending instances) alerts; older Grafana ignores it.
 function rulesUrl(instance) {
-  return instance.type === "grafana" ? instance.url + "/api/prometheus/grafana/api/v1/rules?state=pending&state=firing" : ""
+  return instance.type === "grafana" ? `${instance.url}/api/prometheus/grafana/api/v1/rules?state=pending&state=firing` : ""
 }
 
 // Pending alert instances of one Grafana as panel rows, the ones pending longest first. The instance's matchers
 // are applied here, since the rules API has no filter= like the alerts API. Rows look like normalize() rows,
 // with `isPending` and `startsAt` = activeAt.
 function normalizePending(raw, instance) {
-  var groups = (raw && raw.data && raw.data.groups) || []
+  var groups = raw?.data?.groups || []
   var rows = []
   for (var g = 0; g < groups.length; g++) {
-    var rules = (groups[g] && groups[g].rules) || []
+    var rules = groups[g]?.rules || []
     for (var r = 0; r < rules.length; r++) {
       var rule = rules[r] || {}
       var alerts = rule.alerts || []
@@ -251,7 +251,7 @@ function normalizePending(raw, instance) {
         rows.push({
           isPending: true,
           instance: instance.name,
-          key: "pending:" + instance.name + "/" + JSON.stringify(labels),
+          key: `pending:${instance.name}/${JSON.stringify(labels)}`,
           name: String(labels.alertname || rule.name || "Unnamed alert"),
           severity: severityOf(labels),
           summary: String(annotations.summary || annotations.description || ""),
@@ -259,7 +259,7 @@ function normalizePending(raw, instance) {
           labelText: displayLabels(labels).join("  "),
           // Go timestamps carry nanoseconds, which QML's Date.parse may reject.
           startsAt: String(a.activeAt || "").replace(/(\.\d{3})\d+/, "$1"),
-          url: rule.uid ? instance.url + "/alerting/grafana/" + rule.uid + "/view" : "",
+          url: rule.uid ? `${instance.url}/alerting/grafana/${rule.uid}/view` : "",
           ruleUid: String(rule.uid || ""),
           silenced: false,
         })
@@ -276,9 +276,9 @@ function section(instances, byInstance, errorsByInstance) {
     failed = []
   for (var i = 0; i < instances.length; i++) {
     var n = instances[i].name
-    list = list.concat((byInstance || {})[n] || [])
-    var e = (errorsByInstance || {})[n]
-    if (e) failed.push(instances.length > 1 ? n + ": " + e : e)
+    list = list.concat(byInstance?.[n] || [])
+    var e = errorsByInstance?.[n]
+    if (e) failed.push(instances.length > 1 ? `${n}: ${e}` : e)
   }
   return { list: list, error: failed.join("; ") }
 }
@@ -295,7 +295,7 @@ function panelItems(instances, rowsByInstance, errors, silencesByInstance, silen
     if (instances.length > 1)
       items.push({
         header: true,
-        key: "#" + name,
+        key: `#${name}`,
         instance: name,
         error: errors[name] || "",
         count: summarize(rows).total,
@@ -331,12 +331,12 @@ function duration(startsAt, nowMs) {
   var start = Date.parse(startsAt)
   if (!isFinite(start)) return ""
   var sec = Math.max(0, Math.floor((nowMs - start) / 1000))
-  if (sec < 60) return sec + "s"
+  if (sec < 60) return `${sec}s`
   var min = Math.floor(sec / 60)
-  if (min < 60) return min + "m"
+  if (min < 60) return `${min}m`
   var h = Math.floor(min / 60)
-  if (h < 24) return h + "h " + (min % 60) + "m"
-  return Math.floor(h / 24) + "d " + (h % 24) + "h"
+  if (h < 24) return `${h}h ${min % 60}m`
+  return `${Math.floor(h / 24)}d ${h % 24}h`
 }
 
 // The other way round: how long until `endsAt`.
@@ -346,10 +346,10 @@ function remaining(endsAt, nowMs) {
 }
 
 function silencesUrl(instance) {
-  return apiBase(instance) + "/silences"
+  return `${apiBase(instance)}/silences`
 }
 function expireUrl(instance, id) {
-  return apiBase(instance) + "/silence/" + encodeURIComponent(id)
+  return `${apiBase(instance)}/silence/${encodeURIComponent(id)}`
 }
 
 // API matcher { name, value, isRegex, isEqual } in the same text form as the instance filters.
@@ -365,11 +365,11 @@ function normalizeSilences(raw, instance) {
   var out = []
   for (var i = 0; i < raw.length; i++) {
     var s = raw[i] || {}
-    if (!s.status || s.status.state !== "active") continue
+    if (s.status?.state !== "active") continue
     out.push({
       isSilence: true,
       instance: String(instance || ""),
-      key: "silence:" + instance + "/" + s.id,
+      key: `silence:${instance}/${s.id}`,
       id: String(s.id),
       matcherText: (s.matchers || []).map(silenceMatcherText).join(", "),
       createdBy: String(s.createdBy || ""),
@@ -411,10 +411,10 @@ function oncallRange(nowMs) {
 // is the end of the whole stretch, not of the first rotation layer.
 function normalizeOncall(raw) {
   var byId = {}
-  var lists = (raw && raw.shifts) || []
+  var lists = raw?.shifts || []
   for (var i = 0; i < lists.length; i++) if (lists[i]) byId[lists[i].id] = lists[i].shifts || []
   var out = []
-  var schedules = (raw && raw.schedules) || []
+  var schedules = raw?.schedules || []
   for (var j = 0; j < schedules.length; j++) {
     var s = schedules[j] || {}
     out.push({ id: String(s.id), name: String(s.name || s.id), shifts: mergeShifts(byId[s.id] || []) })
@@ -459,8 +459,8 @@ var WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 function clock(iso, nowMs) {
   var d = new Date(Date.parse(iso)),
     n = new Date(nowMs)
-  var hm = ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2)
-  return d.toDateString() === n.toDateString() ? hm : WEEKDAYS[d.getDay()] + " " + hm
+  var hm = `${(`0${d.getHours()}`).slice(-2)}:${(`0${d.getMinutes()}`).slice(-2)}`
+  return d.toDateString() === n.toDateString() ? hm : `${WEEKDAYS[d.getDay()]} ${hm}`
 }
 
 // What the panel and the bar show for OnCall. `visible` is false when no instance has OnCall on, and then nothing
@@ -477,14 +477,14 @@ function oncallView(instances, byInstance, errors, nowMs) {
     var inst = list[i],
       user = inst.oncall.user
     if (user !== "") view.hasUser = true
-    var err = (errors || {})[inst.name]
+    var err = errors?.[inst.name]
     if (err) {
-      view.rows.push({ error: true, title: inst.name, text: "could not load: " + err })
+      view.rows.push({ error: true, title: inst.name, text: `could not load: ${err}` })
       continue
     }
-    var schedules = (byInstance || {})[inst.name] || []
+    var schedules = byInstance?.[inst.name] || []
     for (var j = 0; j < schedules.length; j++) {
-      var title = (multi ? inst.name + " / " : "") + schedules[j].name
+      var title = (multi ? `${inst.name} / ` : "") + schedules[j].name
       var shifts = schedules[j].shifts
       var now = shifts.filter((s) => Date.parse(s.start) <= nowMs && nowMs < Date.parse(s.end))
       var me = now.filter((s) => isMe(s, user))
@@ -504,7 +504,7 @@ function oncallView(instances, byInstance, errors, nowMs) {
       })
       if (me.length > 0) {
         view.onCall = true
-        view.current.push(title + " until " + clock(me[0].end, nowMs))
+        view.current.push(`${title} until ${clock(me[0].end, nowMs)}`)
       }
       for (var k = 0; k < shifts.length; k++) {
         if (isMe(shifts[k], user) && Date.parse(shifts[k].start) > nowMs) mine.push({ title: title, start: shifts[k].start, end: shifts[k].end })
@@ -514,7 +514,7 @@ function oncallView(instances, byInstance, errors, nowMs) {
   mine.sort((x, y) => (x.start < y.start ? -1 : x.start > y.start ? 1 : 0))
   view.next = mine
     .slice(0, 2)
-    .map((s) => ({ title: s.title, text: clock(s.start, nowMs) + " – " + clock(s.end, nowMs) + " · in " + remaining(s.start, nowMs) }))
+    .map((s) => ({ title: s.title, text: `${clock(s.start, nowMs)} – ${clock(s.end, nowMs)} · in ${remaining(s.start, nowMs)}` }))
   return view
 }
 
@@ -526,14 +526,14 @@ var SPARK_POINTS = 120
 // Firing alerts carry the rule in a label, pending rows in `ruleUid`. "" means no sparkline.
 function ruleUid(row, instance) {
   if (!row || !instance || instance.type !== "grafana") return ""
-  return String(row.ruleUid || (row.labels && row.labels.__alert_rule_uid__) || "")
+  return String(row.ruleUid || row.labels?.__alert_rule_uid__ || "")
 }
 
 function ruleUrl(instance, uid) {
-  return instance.url + "/api/ruler/grafana/api/v1/rule/" + encodeURIComponent(uid)
+  return `${instance.url}/api/ruler/grafana/api/v1/rule/${encodeURIComponent(uid)}`
 }
 function dsQueryUrl(instance) {
-  return instance.url + "/api/ds/query"
+  return `${instance.url}/api/ds/query`
 }
 
 function isExpression(q) {
@@ -542,9 +542,9 @@ function isExpression(q) {
 
 // One value for gt/lt, two for the range evaluators; anything else (no_value, missing params) gives none.
 function evaluatorValues(ev) {
-  var type = String((ev && ev.type) || "")
+  var type = String(ev?.type || "")
   var n = /range/.test(type) ? 2 : type === "gt" || type === "lt" ? 1 : 0
-  var params = ((ev && ev.params) || []).slice(0, n).map(Number)
+  var params = (ev?.params || []).slice(0, n).map(Number)
   return params.length === n && params.every(isFinite) ? params : []
 }
 
@@ -552,24 +552,24 @@ function evaluatorValues(ev) {
 // The plotted query is the one the condition reads through threshold / classic condition and reduce steps. Only then is
 // the threshold comparable with the series; with math, resample or several classic conditions there is no threshold line.
 function sparkQuery(rule) {
-  var a = (rule && rule.grafana_alert) || {}
+  var a = rule?.grafana_alert || {}
   var data = a.data || [],
     byRef = {}
   for (var i = 0; i < data.length; i++) if (data[i]) byRef[data[i].refId] = data[i]
   var ref = a.condition,
     thresholds = []
   var cond = byRef[ref],
-    m = (cond && cond.model) || {}
+    m = cond?.model || {}
   if (cond && isExpression(cond) && m.type === "threshold") {
-    thresholds = evaluatorValues(m.conditions && m.conditions[0] && m.conditions[0].evaluator)
+    thresholds = evaluatorValues(m.conditions?.[0]?.evaluator)
     ref = m.expression
   } else if (cond && isExpression(cond) && m.type === "classic_conditions" && (m.conditions || []).length === 1) {
     var c = m.conditions[0] || {}
     thresholds = evaluatorValues(c.evaluator)
-    ref = c.query && c.query.params && c.query.params[0]
+    ref = c.query?.params?.[0]
   }
   // Reduce keeps the series' units, so the threshold still applies to the raw series.
-  for (var hops = 0; hops < data.length && byRef[ref] && isExpression(byRef[ref]) && (byRef[ref].model || {}).type === "reduce"; hops++)
+  for (var hops = 0; hops < data.length && byRef[ref] && isExpression(byRef[ref]) && byRef[ref].model?.type === "reduce"; hops++)
     ref = byRef[ref].model.expression
   var q = byRef[ref]
   if (!q || isExpression(q)) {
@@ -596,15 +596,15 @@ function sparkQuery(rule) {
 // /api/ds/query response -> [{ t, v }] of the series whose labels all match the alert's labels (the most specific one),
 // else the first series. Frames may be one series each (Prometheus) or wide (several number fields). null if < 2 points.
 function sparkSeries(resp, refId, labels) {
-  var result = resp && resp.results && resp.results[refId]
+  var result = resp?.results?.[refId]
   if (!result || result.error) return null
   var first = null,
     best = null,
     bestScore = -1
   var frames = result.frames || []
   for (var f = 0; f < frames.length; f++) {
-    var fields = (frames[f] && frames[f].schema && frames[f].schema.fields) || []
-    var values = (frames[f] && frames[f].data && frames[f].data.values) || []
+    var fields = frames[f]?.schema?.fields || []
+    var values = frames[f]?.data?.values || []
     var ti = -1
     for (var k = 0; k < fields.length; k++)
       if (fields[k].type === "time") {
@@ -665,8 +665,8 @@ function formatValue(v) {
 
 // "last 1h · now 1.9 · threshold 1" under the sparkline.
 function sparkCaption(spark) {
-  var parts = ["last 1h", "now " + formatValue(spark.points[spark.points.length - 1].v)]
-  if (spark.thresholds.length > 0) parts.push("threshold " + spark.thresholds.map(formatValue).join("–"))
+  var parts = ["last 1h", `now ${formatValue(spark.points[spark.points.length - 1].v)}`]
+  if (spark.thresholds.length > 0) parts.push(`threshold ${spark.thresholds.map(formatValue).join("–")}`)
   return parts.join(" · ")
 }
 
@@ -768,8 +768,8 @@ function demoOncall(nowMs, instance) {
     base = Math.floor(nowMs / (8 * H)) * 8 * H
   function shift(who, fromH, toH) {
     return {
-      user_pk: "U" + who,
-      user_email: who + "@example.com",
+      user_pk: `U${who}`,
+      user_email: `${who}@example.com`,
       user_username: who,
       shift_start: new Date(base + fromH * H).toISOString(),
       shift_end: new Date(base + toH * H).toISOString(),
@@ -841,8 +841,7 @@ function demoAlerts(nowMs, silences, instance) {
       labels: labels,
       annotations: annotations,
       startsAt: ago(startedMinAgo),
-      generatorURL:
-        instance === "prod" ? "https://grafana.example.com/alerting/grafana/" + fp + "/view" : "https://prometheus.staging.example.com/graph",
+      generatorURL: instance === "prod" ? `https://grafana.example.com/alerting/grafana/${fp}/view` : "https://prometheus.staging.example.com/graph",
       status: { state: silenced ? "suppressed" : "active" },
     }
   }
