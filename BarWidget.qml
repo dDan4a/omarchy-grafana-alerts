@@ -1,5 +1,4 @@
 import QtQuick
-import Quickshell
 import qs.Commons
 import qs.Ui
 
@@ -13,7 +12,7 @@ BarWidget {
   readonly property bool popoutSwitchClosing: panelLoader.item ? panelLoader.item.popoutSwitchClosing === true : false
 
   // One service instance shared by the widgets on every monitor (see AlertSource.qml).
-  readonly property var source: bar && bar.shell ? bar.shell.serviceFor("dan4a.grafana-alerts") : null
+  readonly property var source: root.bar && root.bar.shell ? root.bar.shell.serviceFor("dan4a.grafana-alerts") : null
   readonly property var summary: source ? source.summary : ({
                                                               critical: 0,
                                                               warning: 0,
@@ -57,11 +56,11 @@ BarWidget {
   function configureSource() {
     if (!source)
       return
-    source.instancesFile = String(setting("instancesFile", "~/.config/grafana-alerts/instances.json"))
-    source.grafanaUrl = String(setting("grafanaUrl", ""))
-    source.tokenFile = String(setting("tokenFile", "~/.config/grafana-alerts/token"))
-    source.intervalSec = Number(setting("refreshIntervalSec", 60))
-    source.notify = setting("notify", true) === true
+    source.instancesFile = String(root.setting("instancesFile", "~/.config/grafana-alerts/instances.json"))
+    source.grafanaUrl = String(root.setting("grafanaUrl", ""))
+    source.tokenFile = String(root.setting("tokenFile", "~/.config/grafana-alerts/token"))
+    source.intervalSec = Number(root.setting("refreshIntervalSec", 60))
+    source.notify = root.setting("notify", true) === true
   }
 
   implicitWidth: button.implicitWidth

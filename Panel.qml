@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import Quickshell
 import qs.Commons
@@ -533,7 +535,7 @@ Panel {
                       var line = g.line, last = line[line.length - 1]
                       ctx.beginPath()
                       ctx.moveTo(line[0].x, height)
-                      for (var i = 0; i < line.length; i++)
+                      for (let i = 0; i < line.length; i++)
                         ctx.lineTo(line[i].x, line[i].y)
                       ctx.lineTo(last.x, height)
                       ctx.closePath()
@@ -545,9 +547,9 @@ Panel {
                       ctx.strokeStyle = thresholdColor
                       ctx.lineWidth = 1
                       ctx.beginPath()
-                      for (var t = 0; t < g.thresholds.length; t++) {
-                        var y = Math.round(g.thresholds[t]) + 0.5
-                        for (var x = 0; x < width; x += 7) {
+                      for (let t = 0; t < g.thresholds.length; t++) {
+                        const y = Math.round(g.thresholds[t]) + 0.5
+                        for (let x = 0; x < width; x += 7) {
                           ctx.moveTo(x, y)
                           ctx.lineTo(Math.min(x + 4, width), y)
                         }
@@ -558,7 +560,7 @@ Panel {
                       ctx.lineWidth = 1.5
                       ctx.lineJoin = "round"
                       ctx.beginPath()
-                      for (var j = 0; j < line.length; j++)
+                      for (let j = 0; j < line.length; j++)
                         j === 0 ? ctx.moveTo(line[j].x, line[j].y) : ctx.lineTo(line[j].x, line[j].y)
                       ctx.stroke()
                       ctx.fillStyle = lineColor

@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -26,7 +28,7 @@ Item {
   property var known: ({})
   readonly property var rows: {
     var all = []
-    for (var i = 0; i < instances.length; i++)
+    for (let i = 0; i < instances.length; i++)
       all = all.concat(rowsByInstance[instances[i].name] || [])
     return all
   }
@@ -36,8 +38,8 @@ Item {
     if (configError !== "")
       return configError
     var parts = []
-    for (var i = 0; i < instances.length; i++) {
-      var e = errors[instances[i].name]
+    for (let i = 0; i < instances.length; i++) {
+      const e = errors[instances[i].name]
       if (e)
         parts.push(instances.length > 1 ? instances[i].name + ": " + e : e)
     }
@@ -116,7 +118,7 @@ Item {
     return String(p || "").replace(/^~(?=\/)/, Quickshell.env("HOME"))
   }
   function instanceNamed(name) {
-    for (var i = 0; i < instances.length; i++)
+    for (let i = 0; i < instances.length; i++)
       if (instances[i].name === name)
         return instances[i]
     return null
@@ -155,13 +157,13 @@ Item {
 
   function poll() {
     if (demo) {
-      for (var i = 0; i < instances.length; i++) {
-        var raw = Alerts.demoAlerts(Date.now(), demoSilences, instances[i].name)
+      for (let i = 0; i < instances.length; i++) {
+        const raw = Alerts.demoAlerts(Date.now(), demoSilences, instances[i].name)
         if (raw === null)
           fail(instances[i].name, "demo: connection refused", "")
         else
           apply(instances[i].name, raw)
-        var name = instances[i].name
+        const name = instances[i].name
         set("silencesByInstance", name, Alerts.normalizeSilences(demoSilences.filter(function (s) {
           return s.instance === name
         }), name))
@@ -172,23 +174,23 @@ Item {
       }
       return
     }
-    for (var j = 0; j < fetchers.count; j++) {
-      var f = fetchers.objectAt(j)
+    for (let j = 0; j < fetchers.count; j++) {
+      const f = fetchers.objectAt(j)
       if (f && !f.running)
         f.running = true
     }
-    for (var k = 0; k < silenceFetchers.count; k++) {
-      var sf = silenceFetchers.objectAt(k)
+    for (let k = 0; k < silenceFetchers.count; k++) {
+      const sf = silenceFetchers.objectAt(k)
       if (sf && !sf.running)
         sf.running = true
     }
-    for (var p = 0; p < pendingFetchers.count; p++) {
-      var pf = pendingFetchers.objectAt(p)
+    for (let p = 0; p < pendingFetchers.count; p++) {
+      const pf = pendingFetchers.objectAt(p)
       if (pf && !pf.running)
         pf.running = true
     }
-    for (var o = 0; o < oncallFetchers.count; o++) {
-      var of = oncallFetchers.objectAt(o)
+    for (let o = 0; o < oncallFetchers.count; o++) {
+      const of = oncallFetchers.objectAt(o)
       if (of && !of.running)
         of.running = true
     }
@@ -244,7 +246,7 @@ Item {
 
   function silence(row, minutes) {
     if (demo) {
-      var body = Alerts.silenceBody(row, minutes, Date.now(), Quickshell.env("USER"))
+      const body = Alerts.silenceBody(row, minutes, Date.now(), Quickshell.env("USER"))
       body.instance = row.instance
       body.id = "demo-" + Date.now()
       body.status = {
@@ -378,6 +380,7 @@ Item {
   }
 
   // One fetch process per configured instance, so a slow or dead instance does not hold up the others.
+  // qmllint disable required
   Instantiator {
     id: fetchers
     model: root.configured
@@ -385,7 +388,7 @@ Item {
       required property var modelData
       command: ["sh", "-c", root.curlScript, "sh", root.expandHome(modelData.tokenFile)]
       environment: ({
-                      GA_URL: Alerts.alertsUrl(modelData)
+                      GA_URL: Alerts.alertsUrl(modelData) // qmllint disable incompatible-type
                     })
       stdout: StdioCollector {
         id: fetchOut
@@ -417,7 +420,7 @@ Item {
       required property var modelData
       command: ["sh", "-c", root.curlScript, "sh", root.expandHome(modelData.tokenFile)]
       environment: ({
-                      GA_URL: Alerts.silencesUrl(modelData)
+                      GA_URL: Alerts.silencesUrl(modelData) // qmllint disable incompatible-type
                     })
       stdout: StdioCollector {
         id: silencesOut
@@ -452,7 +455,7 @@ Item {
       required property var modelData
       command: ["sh", "-c", root.curlScript, "sh", root.expandHome(modelData.tokenFile)]
       environment: ({
-                      GA_URL: Alerts.rulesUrl(modelData)
+                      GA_URL: Alerts.rulesUrl(modelData) // qmllint disable incompatible-type
                     })
       stdout: StdioCollector {
         id: pendingOut
@@ -511,6 +514,7 @@ Item {
       }
     }
   }
+  // qmllint enable required
 
   Process {
     id: ruleProcess
