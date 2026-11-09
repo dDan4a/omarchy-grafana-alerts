@@ -57,10 +57,10 @@ function matcherText(m) {
 
 // Same semantics as Alertmanager: regexes are anchored, a missing label is "".
 function matchesAll(labels, matchers) {
-  for (var i = 0; i < (matchers || []).length; i++) {
-    var m = matchers[i]
-    var v = String(labels?.[m.name] || "")
-    var hit = m.op === "=" || m.op === "!=" ? v === m.value : new RegExp(`^(?:${m.value})$`).test(v)
+  for (let i = 0; i < (matchers || []).length; i++) {
+    const m = matchers[i]
+    const v = String(labels?.[m.name] || "")
+    const hit = m.op === "=" || m.op === "!=" ? v === m.value : new RegExp(`^(?:${m.value})$`).test(v)
     if (hit !== (m.op === "=" || m.op === "=~")) return false
   }
   return true
@@ -71,7 +71,7 @@ function matchesAll(labels, matchers) {
 // Throws on malformed JSON or entries, so the panel can say what is wrong with the file.
 function parseInstances(text, legacyUrl, legacyTokenFile) {
   if (text === null || text === undefined) {
-    var url = String(legacyUrl || "").trim()
+    const url = String(legacyUrl || "").trim()
     if (url === "") return []
     return [{ name: "default", type: "grafana", url: url.replace(/\/+$/, ""), tokenFile: String(legacyTokenFile || ""), matchers: [], oncall: null }]
   }
@@ -79,11 +79,11 @@ function parseInstances(text, legacyUrl, legacyTokenFile) {
   if (!Array.isArray(list)) throw new Error("expected a JSON array of instances")
   var out = [],
     seen = {}
-  for (var i = 0; i < list.length; i++) {
-    var e = list[i] || {}
-    var name = String(e.name || "").trim()
-    var type = String(e.type || "grafana")
-    var base = String(e.url || "")
+  for (let i = 0; i < list.length; i++) {
+    const e = list[i] || {}
+    const name = String(e.name || "").trim()
+    const type = String(e.type || "grafana")
+    const base = String(e.url || "")
       .trim()
       .replace(/\/+$/, "")
     if (name === "" || base === "") throw new Error(`instance ${i + 1} needs a name and a url`)
@@ -91,9 +91,9 @@ function parseInstances(text, legacyUrl, legacyTokenFile) {
     if (seen[name]) throw new Error(`duplicate instance name ${name}`)
     seen[name] = true
     if (e.matchers !== undefined && !Array.isArray(e.matchers)) throw new Error(`${name}: matchers must be a list of strings`)
-    var matchers = []
+    const matchers = []
     try {
-      for (var k = 0; k < (e.matchers || []).length; k++) matchers.push(parseMatcher(e.matchers[k]))
+      for (let k = 0; k < (e.matchers || []).length; k++) matchers.push(parseMatcher(e.matchers[k]))
     } catch (err) {
       throw new Error(`${name}: ${err.message}`)
     }
@@ -132,7 +132,7 @@ function apiBase(instance) {
 function alertsUrl(instance) {
   var url = `${apiBase(instance)}/alerts?active=true&inhibited=false`
   var matchers = instance.matchers || []
-  for (var i = 0; i < matchers.length; i++) url += `&filter=${encodeURIComponent(matcherText(matchers[i]))}`
+  for (let i = 0; i < matchers.length; i++) url += `&filter=${encodeURIComponent(matcherText(matchers[i]))}`
   return url
 }
 
@@ -141,12 +141,12 @@ function alertsUrl(instance) {
 function normalize(raw, instance) {
   if (!Array.isArray(raw)) return []
   var rows = []
-  for (var i = 0; i < raw.length; i++) {
-    var a = raw[i] || {}
-    var labels = a.labels || {}
-    var annotations = a.annotations || {}
-    var state = a.status?.state || "active"
-    var fingerprint = String(a.fingerprint || labels.alertname + JSON.stringify(labels))
+  for (let i = 0; i < raw.length; i++) {
+    const a = raw[i] || {}
+    const labels = a.labels || {}
+    const annotations = a.annotations || {}
+    const state = a.status?.state || "active"
+    const fingerprint = String(a.fingerprint || labels.alertname + JSON.stringify(labels))
     rows.push({
       instance: String(instance || ""),
       key: `${String(instance || "")}/${fingerprint}`,
@@ -172,7 +172,7 @@ function normalize(raw, instance) {
 // Counts only alerts that need attention: silenced ones are already handled.
 function summarize(rows) {
   var s = { critical: 0, warning: 0, info: 0, silenced: 0, total: 0 }
-  for (var i = 0; i < rows.length; i++) {
+  for (let i = 0; i < rows.length; i++) {
     if (rows[i].silenced) {
       s.silenced++
       continue
@@ -192,7 +192,7 @@ function newAlerts(rows, known) {
 
 function fingerprints(rows) {
   var set = {}
-  for (var i = 0; i < rows.length; i++) set[rows[i].key] = true
+  for (let i = 0; i < rows.length; i++) set[rows[i].key] = true
   return set
 }
 
@@ -217,7 +217,7 @@ function dndText(until, nowMs) {
 // The saved file holds just the number; anything else counts as off.
 function parseDnd(text) {
   var n = Number(String(text || "").trim())
-  return isFinite(n) && (n === DND_FOREVER || n > 0) ? n : 0
+  return Number.isFinite(n) && (n === DND_FOREVER || n > 0) ? n : 0
 }
 
 // What to announce for this poll. DND drops the notifications but the caller still records `known`,
@@ -238,16 +238,16 @@ function rulesUrl(instance) {
 function normalizePending(raw, instance) {
   var groups = raw?.data?.groups || []
   var rows = []
-  for (var g = 0; g < groups.length; g++) {
-    var rules = groups[g]?.rules || []
-    for (var r = 0; r < rules.length; r++) {
-      var rule = rules[r] || {}
-      var alerts = rule.alerts || []
-      for (var i = 0; i < alerts.length; i++) {
-        var a = alerts[i] || {}
-        var labels = a.labels || {}
+  for (let g = 0; g < groups.length; g++) {
+    const rules = groups[g]?.rules || []
+    for (let r = 0; r < rules.length; r++) {
+      const rule = rules[r] || {}
+      const alerts = rule.alerts || []
+      for (let i = 0; i < alerts.length; i++) {
+        const a = alerts[i] || {}
+        const labels = a.labels || {}
         if (String(a.state || "").toLowerCase() !== "pending" || !matchesAll(labels, instance.matchers)) continue
-        var annotations = a.annotations || rule.annotations || {}
+        const annotations = a.annotations || rule.annotations || {}
         rows.push({
           isPending: true,
           instance: instance.name,
@@ -274,10 +274,10 @@ function normalizePending(raw, instance) {
 function section(instances, byInstance, errorsByInstance) {
   var list = [],
     failed = []
-  for (var i = 0; i < instances.length; i++) {
-    var n = instances[i].name
+  for (let i = 0; i < instances.length; i++) {
+    const n = instances[i].name
     list = list.concat(byInstance?.[n] || [])
-    var e = errorsByInstance?.[n]
+    const e = errorsByInstance?.[n]
     if (e) failed.push(instances.length > 1 ? `${n}: ${e}` : e)
   }
   return { list: list, error: failed.join("; ") }
@@ -289,9 +289,9 @@ function section(instances, byInstance, errorsByInstance) {
 // whose request for them failed.
 function panelItems(instances, rowsByInstance, errors, silencesByInstance, silenceErrors, pendingByInstance, pendingErrors) {
   var items = []
-  for (var i = 0; i < instances.length; i++) {
-    var name = instances[i].name
-    var rows = rowsByInstance[name] || []
+  for (let i = 0; i < instances.length; i++) {
+    const name = instances[i].name
+    const rows = rowsByInstance[name] || []
     if (instances.length > 1)
       items.push({
         header: true,
@@ -316,20 +316,20 @@ function panelItems(instances, rowsByInstance, errors, silencesByInstance, silen
 // Next selectable index from `from` moving by `dy`, skipping headers; stays put at the ends.
 function step(items, from, dy) {
   var dir = dy < 0 ? -1 : 1
-  for (var i = from + dir; i >= 0 && i < items.length; i += dir) {
+  for (let i = from + dir; i >= 0 && i < items.length; i += dir) {
     if (!items[i].header) return i
   }
   return from
 }
 
 function firstRow(items) {
-  for (var i = 0; i < items.length; i++) if (!items[i].header) return i
+  for (let i = 0; i < items.length; i++) if (!items[i].header) return i
   return -1
 }
 
 function duration(startsAt, nowMs) {
   var start = Date.parse(startsAt)
-  if (!isFinite(start)) return ""
+  if (!Number.isFinite(start)) return ""
   var sec = Math.max(0, Math.floor((nowMs - start) / 1000))
   if (sec < 60) return `${sec}s`
   var min = Math.floor(sec / 60)
@@ -342,7 +342,7 @@ function duration(startsAt, nowMs) {
 // The other way round: how long until `endsAt`.
 function remaining(endsAt, nowMs) {
   var end = Date.parse(endsAt)
-  return isFinite(end) ? duration(new Date(nowMs).toISOString(), end) : ""
+  return Number.isFinite(end) ? duration(new Date(nowMs).toISOString(), end) : ""
 }
 
 function silencesUrl(instance) {
@@ -363,8 +363,8 @@ function silenceMatcherText(m) {
 function normalizeSilences(raw, instance) {
   if (!Array.isArray(raw)) return []
   var out = []
-  for (var i = 0; i < raw.length; i++) {
-    var s = raw[i] || {}
+  for (let i = 0; i < raw.length; i++) {
+    const s = raw[i] || {}
     if (s.status?.state !== "active") continue
     out.push({
       isSilence: true,
@@ -412,11 +412,11 @@ function oncallRange(nowMs) {
 function normalizeOncall(raw) {
   var byId = {}
   var lists = raw?.shifts || []
-  for (var i = 0; i < lists.length; i++) if (lists[i]) byId[lists[i].id] = lists[i].shifts || []
+  for (let i = 0; i < lists.length; i++) if (lists[i]) byId[lists[i].id] = lists[i].shifts || []
   var out = []
   var schedules = raw?.schedules || []
-  for (var j = 0; j < schedules.length; j++) {
-    var s = schedules[j] || {}
+  for (let j = 0; j < schedules.length; j++) {
+    const s = schedules[j] || {}
     out.push({ id: String(s.id), name: String(s.name || s.id), shifts: mergeShifts(byId[s.id] || []) })
   }
   out.sort((x, y) => (x.name < y.name ? -1 : x.name > y.name ? 1 : 0))
@@ -425,19 +425,19 @@ function normalizeOncall(raw) {
 
 function mergeShifts(list) {
   var shifts = []
-  for (var i = 0; i < list.length; i++) {
-    var x = list[i] || {}
-    var start = Date.parse(x.shift_start),
+  for (let i = 0; i < list.length; i++) {
+    const x = list[i] || {}
+    const start = Date.parse(x.shift_start),
       end = Date.parse(x.shift_end)
-    if (!isFinite(start) || !isFinite(end) || end <= start) continue
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue
     shifts.push({ email: String(x.user_email || ""), username: String(x.user_username || ""), start: start, end: end })
   }
   shifts.sort((a, b) => a.start - b.start)
   var out = []
-  for (var k = 0; k < shifts.length; k++) {
-    var cur = shifts[k],
+  for (let k = 0; k < shifts.length; k++) {
+    let cur = shifts[k],
       merged = false
-    for (var m = out.length - 1; m >= 0 && !merged; m--) {
+    for (let m = out.length - 1; m >= 0 && !merged; m--) {
       if (out[m].email === cur.email && out[m].username === cur.username && out[m].end >= cur.start) {
         out[m].end = Math.max(out[m].end, cur.end)
         merged = true
@@ -473,22 +473,22 @@ function oncallView(instances, byInstance, errors, nowMs) {
   view.visible = true
   var multi = list.length > 1,
     mine = []
-  for (var i = 0; i < list.length; i++) {
-    var inst = list[i],
+  for (let i = 0; i < list.length; i++) {
+    const inst = list[i],
       user = inst.oncall.user
     if (user !== "") view.hasUser = true
-    var err = errors?.[inst.name]
+    const err = errors?.[inst.name]
     if (err) {
       view.rows.push({ error: true, title: inst.name, text: `could not load: ${err}` })
       continue
     }
-    var schedules = byInstance?.[inst.name] || []
-    for (var j = 0; j < schedules.length; j++) {
-      var title = (multi ? `${inst.name} / ` : "") + schedules[j].name
-      var shifts = schedules[j].shifts
-      var now = shifts.filter((s) => Date.parse(s.start) <= nowMs && nowMs < Date.parse(s.end))
-      var me = now.filter((s) => isMe(s, user))
-      var end = now.map((s) => s.end).sort()[0]
+    const schedules = byInstance?.[inst.name] || []
+    for (let j = 0; j < schedules.length; j++) {
+      const title = (multi ? `${inst.name} / ` : "") + schedules[j].name
+      const shifts = schedules[j].shifts
+      const now = shifts.filter((s) => Date.parse(s.start) <= nowMs && nowMs < Date.parse(s.end))
+      const me = now.filter((s) => isMe(s, user))
+      const end = now.map((s) => s.end).sort()[0]
       view.rows.push({
         title: title,
         me: me.length > 0,
@@ -506,7 +506,7 @@ function oncallView(instances, byInstance, errors, nowMs) {
         view.onCall = true
         view.current.push(`${title} until ${clock(me[0].end, nowMs)}`)
       }
-      for (var k = 0; k < shifts.length; k++) {
+      for (let k = 0; k < shifts.length; k++) {
         if (isMe(shifts[k], user) && Date.parse(shifts[k].start) > nowMs) mine.push({ title: title, start: shifts[k].start, end: shifts[k].end })
       }
     }
@@ -545,7 +545,7 @@ function evaluatorValues(ev) {
   var type = String(ev?.type || "")
   var n = /range/.test(type) ? 2 : type === "gt" || type === "lt" ? 1 : 0
   var params = (ev?.params || []).slice(0, n).map(Number)
-  return params.length === n && params.every(isFinite) ? params : []
+  return params.length === n && params.every(Number.isFinite) ? params : []
 }
 
 // Ruler API rule -> { refId, request (POST /api/ds/query body), thresholds }, or null when the rule has no datasource query.
@@ -555,7 +555,7 @@ function sparkQuery(rule) {
   var a = rule?.grafana_alert || {}
   var data = a.data || [],
     byRef = {}
-  for (var i = 0; i < data.length; i++) if (data[i]) byRef[data[i].refId] = data[i]
+  for (let i = 0; i < data.length; i++) if (data[i]) byRef[data[i].refId] = data[i]
   var ref = a.condition,
     thresholds = []
   var cond = byRef[ref],
@@ -564,12 +564,12 @@ function sparkQuery(rule) {
     thresholds = evaluatorValues(m.conditions?.[0]?.evaluator)
     ref = m.expression
   } else if (cond && isExpression(cond) && m.type === "classic_conditions" && (m.conditions || []).length === 1) {
-    var c = m.conditions[0] || {}
+    const c = m.conditions[0] || {}
     thresholds = evaluatorValues(c.evaluator)
     ref = c.query?.params?.[0]
   }
   // Reduce keeps the series' units, so the threshold still applies to the raw series.
-  for (var hops = 0; hops < data.length && byRef[ref] && isExpression(byRef[ref]) && byRef[ref].model?.type === "reduce"; hops++)
+  for (let hops = 0; hops < data.length && byRef[ref] && isExpression(byRef[ref]) && byRef[ref].model?.type === "reduce"; hops++)
     ref = byRef[ref].model.expression
   var q = byRef[ref]
   if (!q || isExpression(q)) {
@@ -602,21 +602,21 @@ function sparkSeries(resp, refId, labels) {
     best = null,
     bestScore = -1
   var frames = result.frames || []
-  for (var f = 0; f < frames.length; f++) {
-    var fields = frames[f]?.schema?.fields || []
-    var values = frames[f]?.data?.values || []
-    var ti = -1
-    for (var k = 0; k < fields.length; k++)
+  for (let f = 0; f < frames.length; f++) {
+    const fields = frames[f]?.schema?.fields || []
+    const values = frames[f]?.data?.values || []
+    let ti = -1
+    for (let k = 0; k < fields.length; k++)
       if (fields[k].type === "time") {
         ti = k
         break
       }
     if (ti < 0) continue
-    for (var j = 0; j < fields.length; j++) {
+    for (let j = 0; j < fields.length; j++) {
       if (fields[j].type !== "number") continue
-      var series = { times: values[ti] || [], vals: values[j] || [] }
+      const series = { times: values[ti] || [], vals: values[j] || [] }
       if (!first) first = series
-      var l = fields[j].labels || {},
+      let l = fields[j].labels || {},
         score = 0
       for (var key in l) score = score >= 0 && labels && String(labels[key]) === String(l[key]) ? score + 1 : -1
       if (score > bestScore) {
@@ -628,9 +628,9 @@ function sparkSeries(resp, refId, labels) {
   var pick = best || first
   if (!pick) return null
   var points = []
-  for (var p = 0; p < pick.times.length; p++) {
-    var v = pick.vals[p]
-    if (v !== null && v !== undefined && isFinite(v)) points.push({ t: Number(pick.times[p]), v: Number(v) })
+  for (let p = 0; p < pick.times.length; p++) {
+    const v = pick.vals[p]
+    if (v !== null && v !== undefined && Number.isFinite(Number(v))) points.push({ t: Number(pick.times[p]), v: Number(v) })
   }
   points.sort((x, y) => x.t - y.t)
   return points.length >= 2 ? points : null
@@ -802,15 +802,15 @@ function demoSpark(row, nowMs) {
   var d = DEMO_SPARKS[row.name]
   if (!d || row.instance !== "prod") return null
   var seed = 0
-  for (var c = 0; c < row.key.length; c++) seed = (seed * 31 + row.key.charCodeAt(c)) % 1000
+  for (let c = 0; c < row.key.length; c++) seed = (seed * 31 + row.key.charCodeAt(c)) % 1000
   var step = SPARK_WINDOW_MS / SPARK_POINTS,
     end = Math.floor(nowMs / step) * step,
     points = []
-  for (var i = 0; i <= SPARK_POINTS; i++) {
-    var t = end - (SPARK_POINTS - i) * step,
+  for (let i = 0; i <= SPARK_POINTS; i++) {
+    const t = end - (SPARK_POINTS - i) * step,
       k = t / step
-    var ramp = Math.min(1, Math.max(0, (i - SPARK_POINTS * 0.55) / (SPARK_POINTS * 0.35)))
-    var noise = Math.sin(k * 0.9 + seed) * 0.6 + Math.sin(k * 0.23 + seed * 2) * 0.4
+    const ramp = Math.min(1, Math.max(0, (i - SPARK_POINTS * 0.55) / (SPARK_POINTS * 0.35)))
+    const noise = Math.sin(k * 0.9 + seed) * 0.6 + Math.sin(k * 0.23 + seed * 2) * 0.4
     points.push({ t: t, v: d.from + (d.to - d.from) * ramp * ramp * (3 - 2 * ramp) + noise * Math.abs(d.to - d.from) * 0.06 })
   }
   return { points: points, thresholds: [d.threshold] }
