@@ -186,7 +186,8 @@ notification, not two.
 ## Development
 
 ```bash
-node tests/alerts.test.js                 # pure logic: instances, matchers, parsing, ordering, grouping, silences, pending, on-call, sparkline, demo data
+node --test                               # pure logic: instances, matchers, parsing, ordering, grouping, silences, pending, on-call, sparkline, demo data
+/usr/lib/qt6/bin/qmllint *.qml && /usr/lib/qt6/bin/qmlformat -i *.qml && npx @biomejs/biome@2.6.6 ci .   # lint, as in CI
 ln -s "$PWD" ~/.config/omarchy/plugins/dan4a.grafana-alerts
 omarchy plugin enable dan4a.grafana-alerts
 ```
