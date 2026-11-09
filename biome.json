@@ -1,5 +1,8 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.6.6/schema.json",
+  "files": {
+    "includes": ["**", "!Alerts.js", "!**/*.md"]
+  },
   "formatter": {
     "indentStyle": "space",
     "indentWidth": 2,
@@ -9,5 +12,17 @@
     "formatter": {
       "semicolons": "asNeeded"
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["Alerts.js"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noUnusedVariables": "off"
+          }
+        }
+      }
+    }
+  ]
 }
